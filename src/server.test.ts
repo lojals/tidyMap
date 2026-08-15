@@ -28,7 +28,7 @@ function buildTestServer() {
 describe('buildServer error handler', () => {
   it('maps ReauthRequiredError to 401 through a real route (POST /auth/reset for a user with no stored tokens)', async () => {
     const { app, db } = buildTestServer();
-    db.insert(users).values({ id: 'u1', googleSub: 's', email: 'a@b.com', createdAt: 0 }).run();
+    db.insert(users).values({ id: 'u1', createdAt: 0 }).run();
 
     // No oauthTokens row exists for u1, so getValidAccessToken throws
     // ReauthRequiredError('No tokens stored for this user.') unguarded --

@@ -21,7 +21,7 @@ const placesOk = () => new Response(JSON.stringify({
 function buildTestServer() {
   const db = createDb(':memory:');
   migrate(db);
-  db.insert(users).values({ id: 'u1', googleSub: 's', email: 'a@b.com', createdAt: 0 }).run();
+  db.insert(users).values({ id: 'u1', createdAt: 0 }).run();
 
   const config = loadConfig({
     GOOGLE_CLIENT_ID: 'id', GOOGLE_CLIENT_SECRET: 'secret',

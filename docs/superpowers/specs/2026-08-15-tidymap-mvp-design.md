@@ -62,7 +62,38 @@ Nine modules. Everything after `parse/` is pure and network-free.
 | `jobs/` | Pipeline orchestration and job status | all above |
 | `db/` | Drizzle + SQLite | — |
 
-**Tables:** `users`, `oauth_tokens`, `extractions`, `raw_artifacts`, `places`.
+**Tables:** `users`, `oauth_tokens`, `oauth_states`, `extractions`, `raw_artifacts`, `places`.
+
+### The consent flow is anonymous — corrected after a live OAuth attempt
+
+Google's Data Portability API imposes a constraint this design originally missed:
+
+> "Requests for Data Portability API scopes … can't be mixed with other scopes (such as,
+> `https://www.googleapis.com/auth/userinfo.email`)."
+>
+> "during the OAuth flow, your app does not know which Google Account was used to give
+> consent. The OAuth token your application receives is opaque."
+>
+> — [Configure OAuth for your application](https://developers.google.com/data-portability/user-guide/configure-oauth)
+
+The original design requested `openid` and `email` alongside the Portability scopes and
+derived `userId` from the ID token's `sub` claim. **Google rejects that request outright**
+(`Error 400: invalid_request`), and there is no ID token in a Portability-only flow, so the
+identity mechanism was not merely mis-scoped — it was impossible.
+
+Consequences, all deliberate:
+
+- The authorization request carries **only** the two `dataportability.*` scopes.
+- `userId` is an opaque `randomUUID()` minted at callback time. This *strengthens* the
+  security posture: the unauthenticated `POST /auth/reset` route can no longer be targeted
+  by guessing an identifier derived from a Google account.
+- We cannot recognise a returning user, so **every consent creates a new `users` row.**
+  Acceptable for single-user Phase 1; it needs rethinking before real multi-user.
+- No email or account identity is available to display anywhere.
+
+No test could have caught this: every test asserted our scopes were present in the auth URL,
+which they were. Only a live consent request reveals that Google refuses the combination —
+the same class of gap that hid the `API_KEY_INVALID` behavior.
 
 ## HTTP surface
 
@@ -204,7 +235,7 @@ table surface from real data rather than speculation.
 | Expired refresh token | 401 with re-auth link |
 | Places API key missing | Rejected at startup by config validation, naming the variable |
 | Places billing not enabled | The first 403 throws and aborts the extraction with an explicit billing message. Not retried — every later call would fail identically, so 20 confusing 403s are avoided without a paid startup probe |
-| Places key present but invalid | Google returns **400 `API_KEY_INVALID`**, not 401/403 — verified against the live API during Task 12. A 400 is neither in the throw branch nor retryable, so it falls through to `return null` and silently marks every place unresolved. Must be treated as fatal alongside 401/403 |
+| Places key present but invalid | Google returns **400 `API_KEY_INVALID`**, not 401/403 — verified against the live API during Task 12. 400 is therefore treated as fatal alongside 401/403: it throws naming `GOOGLE_PLACES_API_KEY` and is not retried, so the extraction ends `failed`. Before that fix a 400 fell through to `return null`, silently marking every place unresolved while the job reported `complete` |
 
 ## Fixture mode
 

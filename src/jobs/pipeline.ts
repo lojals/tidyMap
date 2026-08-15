@@ -69,6 +69,25 @@ function summarizeWarnings(extractionId: string): string | null {
 }
 
 /**
+ * summarizeWarnings, guarded against throwing. Used on the failure paths
+ * (timeout, catch block) where the only alternative to a warnings summary is
+ * losing the extraction's recorded status entirely -- runExtraction is
+ * documented never to throw, so a bug in the summary itself must not be
+ * allowed to turn a recorded failure into an unhandled rejection.
+ */
+function safeSummarizeWarnings(extractionId: string): string | null {
+  try {
+    return summarizeWarnings(extractionId);
+  } catch (summaryError) {
+    console.error(
+      `runExtraction: failed to summarize warnings for extraction ${extractionId}.`,
+      summaryError,
+    );
+    return null;
+  }
+}
+
+/**
  * Polls until the archive is ready. On timeout the job is marked `timed_out`
  * but the archiveJobId is kept, so polling can resume later — re-initiating
  * would burn the one-time consent for nothing.
@@ -141,10 +160,18 @@ export async function runExtraction(
   try {
     setStatus(ctx, extractionId, 'running');
 
+    // Process-global registries in a long-running server: reset before every
+    // run -- before fetchExportFiles, not just before parseExport -- so that
+    // even a timeout or an early failure reads only this extraction's own
+    // diagnostics and never a previous run's leftovers.
+    resetSkippedFiles();
+    resetUnmappedCounts();
+
     const files = await fetchExportFiles(ctx, extractionId, userId, deps);
     if (files === 'timed_out') {
       setStatus(ctx, extractionId, 'timed_out', {
         error: 'Archive was not ready within 15 minutes. Poll GET /extractions/:id again later.',
+        warnings: safeSummarizeWarnings(extractionId),
       });
       return;
     }
@@ -157,12 +184,6 @@ export async function runExtraction(
         content: Buffer.from(file.content, 'utf8'),
       }).run();
     }
-
-    // Process-global registries in a long-running server: reset before every
-    // run so one extraction's diagnostics never bleed into the next one's
-    // warnings summary.
-    resetSkippedFiles();
-    resetUnmappedCounts();
 
     const items = parseExport(files, ctx.config.extractionLimit);
 
@@ -185,8 +206,13 @@ export async function runExtraction(
     setStatus(ctx, extractionId, 'complete', { error: null, warnings });
   } catch (error) {
     try {
+      // Additive, not a replacement: whatever parse/enrich recorded before
+      // the failure (e.g. a skipped corrupt export file) is exactly the
+      // context worth having on a failed row, and safeSummarizeWarnings
+      // cannot itself throw and take this write down with it.
       setStatus(ctx, extractionId, 'failed', {
         error: error instanceof Error ? error.message : String(error),
+        warnings: safeSummarizeWarnings(extractionId),
       });
     } catch (writeError) {
       // The extraction row itself could not be updated -- there is nowhere

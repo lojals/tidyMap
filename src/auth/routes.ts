@@ -39,9 +39,12 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
       const tokens = await exchangeCode(code, ctx.config);
       const userId = persistTokens(ctx.db, tokens);
 
+      // No email to report: Portability-only consent never yields one (see
+      // src/auth/oauth.ts). userId is an opaque randomUUID, minted fresh on
+      // every completed consent -- Google gives this server no way to
+      // recognize a returning account, so there is no identity to echo back.
       return reply.send({
         userId,
-        email: tokens.email,
         next: `POST /extractions with { "userId": "${userId}" }`,
       });
     },
