@@ -33,6 +33,10 @@ describe('parseExport', () => {
   });
 
   it('ignores files that are neither .csv nor .json', () => {
-    expect(parseExport([{ path: 'Saved/photo.jpg', content: 'binary' }], 20)).toEqual([]);
+    // Content that WOULD yield an item if extension routing were removed.
+    // A bare 'binary' string parses to [] under the CSV parser anyway, so it
+    // could not distinguish "skipped by extension" from "empty by coincidence".
+    const csvLike = 'title,item_content_url\nDecoy,https://www.google.com/maps/place/Decoy/\n';
+    expect(parseExport([{ path: 'Saved/photo.jpg', content: csvLike }], 20)).toEqual([]);
   });
 });

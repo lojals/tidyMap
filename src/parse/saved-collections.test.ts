@@ -40,4 +40,17 @@ describe('parseSavedCollectionsCsv', () => {
     const items = parseSavedCollectionsCsv(csv, 'Want to go');
     expect(items[0]!.sourceId).toBe('collection:Want to go:0');
   });
+
+  it('keeps the full URL intact when it contains commas', () => {
+    const [first] = parseSavedCollectionsCsv(csv, 'Want to go');
+    expect(first!.mapsUrl).toBe(
+      "https://www.google.com/maps/place/Satan's+Coffee+Corner/@41.3825,2.1769,17z/",
+    );
+  });
+
+  it('leaves note undefined when the row has neither note nor comment', () => {
+    const parkGuell = parseSavedCollectionsCsv(csv, 'Want to go')
+      .find((i) => i.title === 'Park Güell');
+    expect(parkGuell!.note).toBeUndefined();
+  });
 });
