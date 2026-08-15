@@ -34,4 +34,18 @@ describe('loadConfig', () => {
     const { GOOGLE_PLACES_API_KEY: _omitted, ...withoutKey } = valid;
     expect(() => loadConfig(withoutKey)).toThrow(/GOOGLE_PLACES_API_KEY/);
   });
+
+  it('rejects a negative EXTRACTION_LIMIT', () => {
+    // EXTRACTION_LIMIT feeds a .slice() in parseExport -- a negative value
+    // would silently change what "capped" means rather than erroring.
+    expect(() => loadConfig({ ...valid, EXTRACTION_LIMIT: '-1' })).toThrow(/EXTRACTION_LIMIT/);
+  });
+
+  it('rejects a non-integer EXTRACTION_LIMIT', () => {
+    expect(() => loadConfig({ ...valid, EXTRACTION_LIMIT: '2.5' })).toThrow(/EXTRACTION_LIMIT/);
+  });
+
+  it('rejects a zero EXTRACTION_LIMIT', () => {
+    expect(() => loadConfig({ ...valid, EXTRACTION_LIMIT: '0' })).toThrow(/EXTRACTION_LIMIT/);
+  });
 });

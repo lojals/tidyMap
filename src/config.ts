@@ -8,7 +8,7 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1),
   PORTABILITY_SOURCE: z.enum(['live', 'fixture']).default('live'),
   PORT: z.coerce.number().default(3000),
-  EXTRACTION_LIMIT: z.coerce.number().default(20),
+  EXTRACTION_LIMIT: z.coerce.number().int().positive().default(20),
 });
 
 export interface Config {
