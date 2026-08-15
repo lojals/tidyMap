@@ -20,5 +20,8 @@
     "tsx": "^4.23.12",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "csv-parse": "^7.0.2"
   }
 }
