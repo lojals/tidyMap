@@ -1376,7 +1376,10 @@ describe('enrich', () => {
   });
 
   it('never deduplicates unresolved items together', async () => {
-    const fetch = vi.fn().mockResolvedValue(ok({}));
+    // mockImplementation, not mockResolvedValue: this test makes two real
+    // fetch calls (the titles differ, so the cache does not collapse them),
+    // and a single Response body cannot be read twice.
+    const fetch = vi.fn().mockImplementation(async () => ok({}));
     const places = await enrich([
       item({ sourceId: 'a', title: 'One' }), item({ sourceId: 'b', title: 'Two' }),
     ], { apiKey: 'K', fetch: fetch as never, sleep: noSleep });
@@ -1409,6 +1412,16 @@ import { searchText, type PlacesDeps, type PlaceSearchResult } from './places-cl
 
 function searchTextFor(item: SavedItem): string {
   return item.address ? `${item.title} ${item.address}` : item.title;
+}
+
+/**
+ * Keeps both annotations when the same place carries a different note in two
+ * lists. These are the user's own words — dropping one silently is data loss.
+ */
+function mergeNotes(existing: string | null, incoming: string | null): string | null {
+  if (!existing) return incoming;
+  if (!incoming || existing === incoming) return existing;
+  return `${existing} — ${incoming}`;
 }
 
 function toResolvedPlace(item: SavedItem, match: PlaceSearchResult | null): ResolvedPlace {
@@ -1491,7 +1504,7 @@ export async function enrich(items: SavedItem[], deps: PlacesDeps): Promise<Reso
       for (const list of place.sourceLists) {
         if (!existing.sourceLists.includes(list)) existing.sourceLists.push(list);
       }
-      existing.note ??= place.note;
+      existing.note = mergeNotes(existing.note, place.note);
     } else {
       byPlaceId.set(place.placeId, place);
     }
