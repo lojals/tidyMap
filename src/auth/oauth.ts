@@ -112,7 +112,11 @@ export function persistTokens(db: Db, tokens: TokenSet): string {
     target: oauthTokens.userId,
     set: {
       accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
+      // Only overwrite the refresh token when Google actually sent one.
+      // Google omits refresh_token on most responses, and clobbering a good
+      // stored value with null would force a fresh consent on every later
+      // extraction — the precise cost the one-time authorization makes expensive.
+      ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
       expiresAt: tokens.expiresAt,
       scopes: tokens.scopes,
     },

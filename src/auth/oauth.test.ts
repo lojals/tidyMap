@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildAuthUrl, getValidAccessToken } from './oauth.js';
+import { buildAuthUrl, getValidAccessToken, persistTokens } from './oauth.js';
 import { createDb, migrate } from '../db/client.js';
 import { users, oauthTokens } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -88,5 +88,46 @@ describe('getValidAccessToken', () => {
     const fetch = vi.fn().mockResolvedValue(new Response('invalid_grant', { status: 400 }));
     await expect(getValidAccessToken(db, 'u1', config, { fetch: fetch as never }))
       .rejects.toThrow(/GET \/auth\/google/);
+  });
+});
+
+describe('persistTokens', () => {
+  it('replaces the stored refresh token when re-auth returns a new one', () => {
+    const db = seedDb(Date.now() + 600_000, 'old-refresh');
+
+    const userId = persistTokens(db, {
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      expiresAt: Date.now() + 600_000,
+      scopes: '',
+      googleSub: 's',
+      email: 'a@b.com',
+    });
+
+    expect(userId).toBe('u1');
+    const stored = db.select().from(oauthTokens).where(eq(oauthTokens.userId, 'u1')).all();
+    expect(stored[0]!.refreshToken).toBe('new-refresh');
+  });
+
+  it('preserves the stored refresh token when re-auth omits one', () => {
+    // Google omits refresh_token on most exchanges once offline access has
+    // already been granted. If persistTokens overwrote unconditionally, this
+    // would null out a working refresh token and force a fresh browser
+    // consent on the next expiry — exactly the cost the one-time
+    // Portability authorization makes expensive.
+    const db = seedDb(Date.now() + 600_000, 'old-refresh');
+
+    persistTokens(db, {
+      accessToken: 'new-access',
+      refreshToken: null,
+      expiresAt: Date.now() + 600_000,
+      scopes: '',
+      googleSub: 's',
+      email: 'a@b.com',
+    });
+
+    const stored = db.select().from(oauthTokens).where(eq(oauthTokens.userId, 'u1')).all();
+    expect(stored[0]!.refreshToken).toBe('old-refresh');
+    expect(stored[0]!.accessToken).toBe('new-access');
   });
 });
