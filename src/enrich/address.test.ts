@@ -39,6 +39,16 @@ describe('extractCity', () => {
     ])).toBe('Shibuya City');
   });
 
+  it('never falls back to administrative_area_level_1', () => {
+    // Load-bearing. Every other fixture that carries administrative_area_level_1
+    // also carries locality, so appending it to CITY_TYPES would pass every
+    // other test in this file. This is the only case that would fail.
+    expect(extractCity([
+      c('Tokyo', 'Tokyo', 'administrative_area_level_1'),
+      c('Japan', 'JP', 'country'),
+    ])).toBeNull();
+  });
+
   it('returns null when no city-like component exists', () => {
     expect(extractCity([c('Spain', 'ES', 'country')])).toBeNull();
   });
