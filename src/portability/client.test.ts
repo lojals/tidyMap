@@ -42,7 +42,29 @@ describe('initiateArchive', () => {
 
   it('throws a plain error on other failures', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 500 }));
-    await expect(initiateArchive('tok', { fetch: fetch as never })).rejects.toThrow(/500/);
+    await expect(initiateArchive('tok', { fetch: fetch as never }))
+      .rejects.toThrow('Portability initiate failed with 500: nope');
+  });
+
+  it('throws a plain error, not ConsentAlreadyUsedError, on a 403 without RESOURCE_EXHAUSTED', async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { status: 'PERMISSION_DENIED' } }), { status: 403 }),
+    );
+    // Capture the rejection once via try/catch rather than two separate
+    // `rejects.toThrow()` calls: each call to initiateArchive invokes fetch
+    // again, and mockResolvedValue returns the same Response instance every
+    // time, so a second call would hit "Body is unusable: Body has already
+    // been read" instead of exercising the assertion.
+    let caught: unknown;
+    try {
+      await initiateArchive('tok', { fetch: fetch as never });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).not.toBeInstanceOf(ConsentAlreadyUsedError);
+    expect((caught as Error).message)
+      .toBe('Portability initiate failed with 403: {"error":{"status":"PERMISSION_DENIED"}}');
   });
 
   it('does not assert a spent consent it cannot distinguish from rate limiting', async () => {
@@ -67,8 +89,13 @@ describe('getArchiveState', () => {
     const fetch = vi.fn().mockResolvedValue(ok({ state: 'IN_PROGRESS' }));
     const result = await getArchiveState('tok', 'job-1', { fetch: fetch as never });
 
-    expect(fetch.mock.calls[0]![0])
-      .toBe('https://dataportability.googleapis.com/v1/archiveJobs/job-1/portabilityArchiveState');
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe('https://dataportability.googleapis.com/v1/archiveJobs/job-1/portabilityArchiveState');
+    expect((init?.headers as Record<string, string>)['Authorization']).toBe('Bearer tok');
+    // No method means GET. This must NOT be folded into the POST-only call()
+    // helper -- doing so would silently turn polling into a POST.
+    expect(init?.method ?? 'GET').toBe('GET');
+    expect(init?.body).toBeUndefined();
     expect(result).toEqual({ state: 'IN_PROGRESS', urls: [] });
   });
 
@@ -77,13 +104,26 @@ describe('getArchiveState', () => {
     const result = await getArchiveState('tok', 'job-1', { fetch: fetch as never });
     expect(result).toEqual({ state: 'COMPLETE', urls: ['https://a', 'https://b'] });
   });
+
+  it('throws with the status and Google\'s message on a non-ok response', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('job not found', { status: 404 }));
+    await expect(getArchiveState('tok', 'job-1', { fetch: fetch as never }))
+      .rejects.toThrow('Portability state check failed with 404: job not found');
+  });
 });
 
 describe('resetAuthorization', () => {
   it('posts to authorization:reset', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
     await resetAuthorization('tok', { fetch: fetch as never });
-    expect(fetch.mock.calls[0]![0])
-      .toBe('https://dataportability.googleapis.com/v1/authorization:reset');
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe('https://dataportability.googleapis.com/v1/authorization:reset');
+    expect((init?.headers as Record<string, string>)['Authorization']).toBe('Bearer tok');
+  });
+
+  it('throws with the status and Google\'s message on a non-ok response', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('reset denied for account', { status: 400 }));
+    await expect(resetAuthorization('tok', { fetch: fetch as never }))
+      .rejects.toThrow('Authorization reset failed with 400: reset denied for account');
   });
 });
