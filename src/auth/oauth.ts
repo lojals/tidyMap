@@ -154,18 +154,6 @@ export function persistTokens(db: Db, tokens: TokenSet): string {
     refreshToken: tokens.refreshToken,
     expiresAt: tokens.expiresAt,
     scopes: tokens.scopes,
-  }).onConflictDoUpdate({
-    target: oauthTokens.userId,
-    set: {
-      accessToken: tokens.accessToken,
-      // Only overwrite the refresh token when Google actually sent one.
-      // Google omits refresh_token on most responses, and clobbering a good
-      // stored value with null would force a fresh consent on every later
-      // extraction — the precise cost the one-time authorization makes expensive.
-      ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
-      expiresAt: tokens.expiresAt,
-      scopes: tokens.scopes,
-    },
   }).run();
 
   return userId;
@@ -207,6 +195,14 @@ export async function getValidAccessToken(
   const expiresAt = Date.now() + json.expires_in * 1000;
 
   db.update(oauthTokens)
+    // Deliberately omits refreshToken. Google's refresh grant response never
+    // carries a new refresh_token (only a new access_token) -- it is stored
+    // exactly once, at initial consent, by persistTokens above. Clobbering
+    // that stored value with null here would force a fresh consent round-trip
+    // on every later extraction, the precise cost Portability's one-time
+    // authorization already makes expensive. This narrow .set() is the only
+    // live code that both reads and re-persists a refresh token, so it is the
+    // actual enforcement of that invariant.
     .set({ accessToken: json.access_token, expiresAt })
     .where(eq(oauthTokens.userId, userId))
     .run();

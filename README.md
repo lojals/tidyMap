@@ -16,7 +16,20 @@ npm run dev
 
 The database schema is created automatically on startup (`src/db/client.ts`
 runs idempotent `CREATE TABLE IF NOT EXISTS` statements — there is no
-`drizzle-kit` migration step and nothing else to run first).
+`drizzle-kit` migration step and nothing else to run first). One exception:
+if your `.db` file predates the removal of `users.google_sub`/`users.email`,
+startup also performs a one-time, **destructive** rebuild of the `users`
+table (SQLite's documented table-rebuild procedure — see the comment above
+`migrateUsersTableShape` in `src/db/client.ts`) to reach the current schema.
+It runs inside a transaction and rolls back on any foreign-key violation
+rather than leaving the database half-migrated, but rebuilding a table is
+never risk-free — **copy your `.db` file somewhere safe before starting the
+app for the first time after pulling this change.**
+
+`npm start` runs the compiled `dist/`, not `src/` directly — after pulling
+changes, refresh a stale build with `npm run build` before `npm start`, or
+just use `npm run dev` (`tsx watch`), which always runs current source and
+has no build step to forget.
 
 ## Security posture (Phase 1)
 

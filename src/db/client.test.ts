@@ -157,6 +157,69 @@ describe('createDb', () => {
     ).toThrow();
   });
 
+  it('rolls back the users table rebuild when a pre-existing orphan foreign key is found, leaving users in the legacy shape', () => {
+    // Reproduces the exact scenario the review flagged: a foreign_key_check
+    // violation that already exists on disk before migrate() ever runs (a
+    // hand-edited row, or damage from some earlier window). If the check ran
+    // after the rebuild's transaction committed, this would report the
+    // damage but the users table would already be stuck in the new
+    // (reduced) shape, having discarded the fact that oauth_tokens still
+    // points at a ghost user. The fix moves the check inside the
+    // transaction so throwing rolls the whole rebuild back.
+    const db = createDb(':memory:');
+
+    db.run(sql.raw(`CREATE TABLE users (
+       id TEXT PRIMARY KEY,
+       google_sub TEXT NOT NULL UNIQUE,
+       email TEXT NOT NULL,
+       created_at INTEGER NOT NULL
+     )`));
+    db.run(sql.raw(`CREATE TABLE oauth_tokens (
+       user_id TEXT PRIMARY KEY REFERENCES users(id),
+       access_token TEXT NOT NULL,
+       refresh_token TEXT,
+       expires_at INTEGER NOT NULL,
+       scopes TEXT NOT NULL
+     )`));
+    db.run(sql.raw(`CREATE TABLE extractions (
+       id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id),
+       status TEXT NOT NULL,
+       archive_job_id TEXT,
+       error TEXT,
+       warnings TEXT,
+       created_at INTEGER NOT NULL,
+       updated_at INTEGER NOT NULL
+     )`));
+
+    db.run(sql.raw(
+      `INSERT INTO users (id, google_sub, email, created_at) ` +
+      `VALUES ('legacy-user', 'sub-legacy', 'legacy@example.com', 1000)`,
+    ));
+
+    // Seed a pre-existing orphan: an oauth_tokens row whose user_id points at
+    // no row in users at all. foreign_keys must be OFF to even insert this
+    // directly -- createDb() otherwise enforces the constraint immediately --
+    // which is exactly how such a row could already be sitting on disk.
+    db.run(sql.raw('PRAGMA foreign_keys = OFF'));
+    db.run(sql.raw(
+      `INSERT INTO oauth_tokens (user_id, access_token, refresh_token, expires_at, scopes) ` +
+      `VALUES ('ghost-user', 'orphan-access', NULL, 999999, 'orphan-scope')`,
+    ));
+    db.run(sql.raw('PRAGMA foreign_keys = ON'));
+
+    expect(() => migrate(db)).toThrow(/dangling foreign keys/);
+
+    // The rebuild rolled back rather than committing damage: users is still
+    // in the legacy (google_sub/email) shape, not the reduced current one.
+    const userColumns = db.all<{ name: string }>(sql.raw('PRAGMA table_info(users)')).map((c) => c.name);
+    expect(userColumns).toEqual(['id', 'google_sub', 'email', 'created_at']);
+
+    // And the original row -- and the orphan -- are exactly as they were.
+    const userRows = db.all<{ id: string }>(sql.raw('SELECT id FROM users'));
+    expect(userRows).toEqual([{ id: 'legacy-user' }]);
+  });
+
   // Regression test for a real bug: extractions.warnings was added to
   // schema.ts and to migrate()'s CREATE TABLE, but CREATE TABLE IF NOT
   // EXISTS is a no-op against a database that already has the extractions

@@ -47,8 +47,13 @@ async function main(): Promise<void> {
   const app = buildServer({ db, config });
 
   // Loopback only. /auth/reset is unauthenticated and destructive (it revokes
-  // the Portability grant), and userId is derived from the Google sub, so the
-  // listening socket is the only access control Phase 1 has.
+  // the Portability grant), so the listening socket is the primary access
+  // control Phase 1 has. userId is an opaque randomUUID() minted server-side
+  // (persistTokens in src/auth/oauth.ts) -- not derived from the Google sub,
+  // which the Portability-only OAuth flow never receives -- and that opaque
+  // id makes the unauthenticated /auth/reset considerably harder to target
+  // than a predictable scheme would be, but it is not a substitute for the
+  // loopback binding.
   await app.listen({ port: config.port, host: '127.0.0.1' });
   console.log(`TidyMap listening on http://localhost:${config.port}`);
   console.log(`Portability source: ${config.portabilitySource}`);

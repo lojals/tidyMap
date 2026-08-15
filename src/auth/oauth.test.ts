@@ -240,6 +240,13 @@ describe('getValidAccessToken', () => {
     expect(token).toBe('new-token');
     const stored = db.select().from(oauthTokens).where(eq(oauthTokens.userId, 'u1')).all();
     expect(stored[0]!.accessToken).toBe('new-token');
+    // This is the only live code path that both reads and persists a refresh
+    // token (persistTokens' onConflictDoUpdate branch is unreachable -- see
+    // its comment). Google's refresh grant response never carries a new
+    // refresh_token, so this update must never touch the column -- proving
+    // the original 'refresh' survives is what actually protects that
+    // invariant, not just that accessToken changed.
+    expect(stored[0]!.refreshToken).toBe('refresh');
 
     const [url, init] = fetch.mock.calls[0]!;
     expect(url).toBe('https://oauth2.googleapis.com/token');

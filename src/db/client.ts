@@ -54,8 +54,31 @@ function addColumnIfMissing(db: Db, table: string, column: string, definition: s
  * transaction, so it must bracket the transaction rather than live inside
  * it. `id` and `created_at` are copied verbatim and the table name is
  * restored at the end, so every dependent row — and every foreign key
- * pointing at it — survives unchanged; `PRAGMA foreign_key_check` after the
- * rebuild proves that rather than assuming it.
+ * pointing at it — survives unchanged; `PRAGMA foreign_key_check` proves
+ * that rather than assuming it.
+ *
+ * That check runs from *inside* the transaction, immediately after the
+ * rename, and a violation throws before the transaction commits -- matching
+ * SQLite's documented twelve-step procedure, which runs this exact check as
+ * step 11, strictly before the COMMIT in step 12
+ * (https://www.sqlite.org/lang_altertable.html#otheralter). Checking only
+ * after db.transaction() returns would mean checking after the commit --
+ * reporting damage instead of preventing it, and leaving a corrupted
+ * database as the new permanent state.
+ *
+ * The check is scoped to `PRAGMA foreign_key_check(oauth_tokens)` and
+ * `PRAGMA foreign_key_check(extractions)` -- the only two tables with a
+ * foreign key into `users` -- rather than the unscoped, whole-database
+ * `PRAGMA foreign_key_check`. The unscoped form also surfaces violations in
+ * tables this migration never touches (e.g. raw_artifacts -> extractions,
+ * places -> extractions); on a database that already has one of those from
+ * some unrelated cause, an unscoped check would fail this migration -- and
+ * therefore every future boot, since the rebuild is retried every time it
+ * finds the legacy shape -- forever, for damage this code neither caused nor
+ * can fix. Scoping keeps the guarantee this migration is actually
+ * responsible for (every oauth_tokens/extractions row that pointed at a real
+ * user before the rebuild still does after it) without turning unrelated
+ * pre-existing corruption into a permanent boot blocker.
  */
 function migrateUsersTableShape(db: Db): void {
   const columns = db.all<{ name: string }>(sql.raw('PRAGMA table_info(users)'));
@@ -73,14 +96,27 @@ function migrateUsersTableShape(db: Db): void {
       tx.run(sql.raw('INSERT INTO users_new (id, created_at) SELECT id, created_at FROM users'));
       tx.run(sql.raw('DROP TABLE users'));
       tx.run(sql.raw('ALTER TABLE users_new RENAME TO users'));
-    });
 
-    const violations = db.all(sql.raw('PRAGMA foreign_key_check'));
-    if (violations.length > 0) {
-      throw new Error(
-        `users table rebuild left dangling foreign keys: ${JSON.stringify(violations)}`,
+      // PRAGMA foreign_key_check(table) errors outright ("no such table") if
+      // the named table does not exist yet -- true of a genuinely fresh
+      // database that has only ever had its users table created (some tests
+      // build exactly that), even though a real already-deployed database
+      // being migrated here always has both. Guard rather than assume.
+      const tablesToCheck = ['oauth_tokens', 'extractions'].filter(
+        (table) =>
+          tx.all(
+            sql.raw(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '${table}'`),
+          ).length > 0,
       );
-    }
+      const violations = tablesToCheck.flatMap((table) =>
+        tx.all(sql.raw(`PRAGMA foreign_key_check(${table})`)),
+      );
+      if (violations.length > 0) {
+        throw new Error(
+          `users table rebuild left dangling foreign keys: ${JSON.stringify(violations)}`,
+        );
+      }
+    });
   } finally {
     // Restored unconditionally: createDb() always turns foreign_keys ON, so
     // this migration must never be the reason a session ends up with them off.
