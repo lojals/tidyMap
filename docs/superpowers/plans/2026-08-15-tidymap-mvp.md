@@ -2638,7 +2638,10 @@ function ctxWith(source: 'live' | 'fixture') {
   return { db, config };
 }
 
-const placesOk = new Response(JSON.stringify({
+// A factory, not a shared instance: the pipeline makes several Places calls and
+// a Response body can only be read once. `.mockResolvedValue(shared.clone())`
+// clones exactly once and then reuses the same object.
+const placesOk = () => new Response(JSON.stringify({
   places: [{
     id: 'ChIJfixture',
     displayName: { text: 'Fixture Cafe' },
@@ -2655,7 +2658,7 @@ const noSleep = async () => {};
 describe('runExtraction in fixture mode', () => {
   it('completes without calling the Portability API and stores places', async () => {
     const ctx = ctxWith('fixture');
-    const fetch = vi.fn().mockResolvedValue(placesOk.clone());
+    const fetch = vi.fn().mockImplementation(async () => placesOk());
 
     await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
 

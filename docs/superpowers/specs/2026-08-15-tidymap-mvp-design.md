@@ -197,7 +197,7 @@ table surface from real data rather than speculation.
 | Failure | Behavior |
 |---|---|
 | Second `initiate` without reset | 409 with explicit "consent already used, POST /auth/reset" |
-| Archive `FAILED` / `CANCELLED` | Job → `failed`, Google's reason surfaced verbatim |
+| Archive `FAILED` / `CANCELLED` | Job → `failed`, carrying the state Google reported. The `archiveJobs` state response exposes no free-text reason field, so `FAILED` vs `CANCELLED` is the entire signal available — do not promise more |
 | Poll exceeds 15 min | Job → `timed_out`, **jobId retained** so polling resumes. Never re-initiate — that burns the consent |
 | Places returns no match | Item kept with `resolved: false`. Not an error |
 | Places 429 / 5xx | Retry with backoff; on exhaustion that item is unresolved and the job still completes |
