@@ -24,24 +24,14 @@ async function buildServer(db: ReturnType<typeof createDb>) {
   return app;
 }
 
-/**
- * Builds a fake (unsigned) ID token: header.payload.signature, where the
- * payload is the base64url encoding of the given JSON claims. decodeIdToken
- * only ever reads the payload segment, so the header/signature values are
- * arbitrary placeholders — never a real Google-issued token.
- */
-function fakeIdToken(payload: { sub: string; email: string }): string {
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  return `header.${encoded}.signature`;
-}
-
 function tokenResponse(): Response {
+  // No id_token: Portability-only consent never yields one -- see
+  // src/auth/oauth.ts.
   return new Response(JSON.stringify({
     access_token: 'access-1',
     refresh_token: 'refresh-1',
     expires_in: 3600,
-    scope: 'openid email',
-    id_token: fakeIdToken({ sub: 'sub-1', email: 'user@example.com' }),
+    scope: 'https://www.googleapis.com/auth/dataportability.saved.collections https://www.googleapis.com/auth/dataportability.maps.starred_places',
   }), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
@@ -189,7 +179,10 @@ describe('authRoutes', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ email: 'user@example.com' });
+    // No email in the response: Portability-only consent never yields one --
+    // Google does not tell this app which account gave consent.
+    expect(response.json()).not.toHaveProperty('email');
+    expect(response.json()).toMatchObject({ userId: expect.any(String) });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -219,7 +212,7 @@ describe('authRoutes', () => {
 
   it('POST /auth/reset resets authorization using the access token for that user', async () => {
     const { db } = buildApp();
-    db.insert(users).values({ id: 'u1', googleSub: 's', email: 'a@b.com', createdAt: 0 }).run();
+    db.insert(users).values({ id: 'u1', createdAt: 0 }).run();
     db.insert(oauthTokens).values({
       userId: 'u1',
       accessToken: 'valid-access-token',

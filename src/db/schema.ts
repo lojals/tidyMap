@@ -1,9 +1,13 @@
 import { sqliteTable, text, integer, blob } from 'drizzle-orm/sqlite-core';
 
+// Portability-only consent is anonymous: Google's Data Portability scopes
+// cannot be requested alongside `openid`/`email` (Google rejects the mixed
+// scope request outright), so the OAuth flow never receives an id_token and
+// there is no `sub` or `email` claim to store. `id` is an opaque randomUUID()
+// minted in src/auth/oauth.ts's persistTokens, not derived from anything
+// Google returns.
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
-  googleSub: text('google_sub').notNull().unique(),
-  email: text('email').notNull(),
   createdAt: integer('created_at').notNull(),
 });
 

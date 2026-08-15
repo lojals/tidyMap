@@ -9,7 +9,7 @@ import { loadConfig } from '../config.js';
 function ctxWith(source: 'live' | 'fixture', extraEnv: Record<string, string> = {}) {
   const db = createDb(':memory:');
   migrate(db);
-  db.insert(users).values({ id: 'u1', googleSub: 's', email: 'a@b.com', createdAt: 0 }).run();
+  db.insert(users).values({ id: 'u1', createdAt: 0 }).run();
   db.insert(extractions).values({
     id: 'e1', userId: 'u1', status: 'pending', createdAt: 0, updatedAt: 0,
   }).run();

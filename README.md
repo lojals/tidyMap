@@ -22,10 +22,26 @@ runs idempotent `CREATE TABLE IF NOT EXISTS` statements — there is no
 
 The server binds `127.0.0.1` only — it is not reachable from other machines
 on the network, even if your firewall would otherwise allow it. This is
-deliberate, not incidental: `POST /auth/reset` is unauthenticated, and
-`userId` is derived predictably from the Google account's `sub` claim
-(`user_<sub>`), so the loopback binding is Phase 1's only access control.
-Do not change the bind host without adding real authentication first.
+deliberate, not incidental: `POST /auth/reset` is unauthenticated, and the
+loopback binding is Phase 1's only access control. Do not change the bind
+host without adding real authentication first.
+
+`userId` is a `randomUUID()` minted server-side on each consent
+(`persistTokens` in `src/auth/oauth.ts`) — not derived from anything Google
+returns. This is a consequence of the OAuth flow, not a hardening choice:
+Google's Data Portability scopes cannot be requested alongside `openid` or
+`email`, so the token exchange never yields an `id_token` and this server has
+no Google-supplied identifier to key off. The upshot for `POST /auth/reset`
+is favorable — an opaque random `userId` is far harder to guess or enumerate
+than the old `user_<sub>` scheme was — but it is not a substitute for the
+loopback binding, which remains the primary control.
+
+**Cost of anonymity:** because the flow never learns which Google account
+consented, this server cannot recognize a returning user. **Every completed
+consent creates a new `users` row** — there is no dedup, and none is
+possible without an identifier to dedup on. Running `GET /auth/google`
+repeatedly (including every re-authorization after a token reset) will
+accumulate rows in the `users` table. This is expected, not a leak to chase.
 
 ## Running without Google
 
@@ -156,7 +172,10 @@ curl -X POST http://localhost:3000/auth/reset \
 ```
 
 Then re-authorize at `/auth/google` — the reset invalidates the existing
-tokens, so consent must be repeated.
+tokens, so consent must be repeated. Re-authorizing mints a **new** `userId`
+(see "Cost of anonymity" above) — the old one still exists as a `users` row,
+but it has no valid tokens and cannot be used for another extraction. Use the
+new `userId` the callback returns, not the one you reset.
 
 **Warning:** Google returns `RESOURCE_EXHAUSTED` for both a spent one-time
 authorization *and* ordinary rate limiting — the two cases are

@@ -35,12 +35,23 @@ Console → APIs & Services → Enable APIs and Services. Enable both:
 
 ## 5. Add the scopes
 
-On the consent screen, add:
+On the consent screen, add exactly these two:
 
 - `https://www.googleapis.com/auth/dataportability.saved.collections`
 - `https://www.googleapis.com/auth/dataportability.maps.starred_places`
-- `openid`
-- `email`
+
+Do **not** also add `openid` or `email`. Google refuses to combine Data
+Portability scopes with any other scope — requesting them together fails the
+OAuth flow outright with `Error 400: invalid_request`:
+
+> Requests for data portability scopes cannot have non data portability scopes.
+
+(See [Google's Data Portability OAuth
+guide](https://developers.google.com/data-portability/user-guide/configure-oauth).)
+One consequence worth knowing before you build against this: because of that
+restriction, the token exchange never returns an `id_token`, so this app has
+no way to learn which Google account gave consent — see "Cost of anonymity"
+in the [README](../README.md).
 
 ## 6. Create the OAuth client
 

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { eq, lt } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/client.js';
@@ -8,7 +8,19 @@ import { PORTABILITY_SCOPES } from '../portability/client.js';
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 
-const SCOPES = ['openid', 'email', ...PORTABILITY_SCOPES];
+/**
+ * Portability scopes only. Google's Data Portability API rejects a scope
+ * request that mixes `dataportability.*` scopes with any other scope
+ * (including `openid`/`email`) with a 400 invalid_request:
+ * "Requests for data portability scopes cannot have non data portability
+ * scopes." — see
+ * https://developers.google.com/data-portability/user-guide/configure-oauth.
+ * A consequence documented on that same page: "during the OAuth flow, your
+ * app does not know which Google Account was used to give consent" — the
+ * token is opaque, with no id_token and no way to recognize a returning
+ * user. See persistTokens below.
+ */
+const SCOPES = PORTABILITY_SCOPES;
 
 export interface OAuthDeps {
   fetch?: typeof globalThis.fetch;
@@ -80,14 +92,6 @@ export interface TokenSet {
   refreshToken: string | null;
   expiresAt: number;
   scopes: string;
-  googleSub: string;
-  email: string;
-}
-
-function decodeIdToken(idToken: string): { sub: string; email: string } {
-  const payload = idToken.split('.')[1] ?? '';
-  const json = Buffer.from(payload, 'base64url').toString('utf8');
-  return JSON.parse(json) as { sub: string; email: string };
 }
 
 export async function exchangeCode(
@@ -118,32 +122,31 @@ export async function exchangeCode(
     throw new Error(`Token exchange failed with status ${response.status}.`);
   }
 
+  // No id_token: Portability-only consent means Google never issues one (see
+  // the SCOPES comment above), so there is nothing here to decode.
   const json = (await response.json()) as {
-    access_token: string; refresh_token?: string; expires_in: number;
-    scope: string; id_token: string;
+    access_token: string; refresh_token?: string; expires_in: number; scope: string;
   };
-
-  const identity = decodeIdToken(json.id_token);
 
   return {
     accessToken: json.access_token,
     refreshToken: json.refresh_token ?? null,
     expiresAt: Date.now() + json.expires_in * 1000,
     scopes: json.scope,
-    googleSub: identity.sub,
-    email: identity.email,
   };
 }
 
+/**
+ * Google never tells this app which account gave consent (no id_token, no
+ * sub, no email — see the SCOPES comment above), so there is no key to look
+ * an existing user up by. Every call mints a fresh opaque id and inserts a
+ * new `users` row: this function cannot recognize a returning user, and does
+ * not try to. Each completed consent flow costs one new row.
+ */
 export function persistTokens(db: Db, tokens: TokenSet): string {
-  const existing = db.select().from(users).where(eq(users.googleSub, tokens.googleSub)).all();
-  const userId = existing[0]?.id ?? `user_${tokens.googleSub}`;
+  const userId = randomUUID();
 
-  if (!existing[0]) {
-    db.insert(users).values({
-      id: userId, googleSub: tokens.googleSub, email: tokens.email, createdAt: Date.now(),
-    }).run();
-  }
+  db.insert(users).values({ id: userId, createdAt: Date.now() }).run();
 
   db.insert(oauthTokens).values({
     userId,

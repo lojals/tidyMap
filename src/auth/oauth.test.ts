@@ -17,22 +17,11 @@ const config = loadConfig({
 function seedDb(expiresAt: number, refreshToken: string | null) {
   const db = createDb(':memory:');
   migrate(db);
-  db.insert(users).values({ id: 'u1', googleSub: 's', email: 'a@b.com', createdAt: 0 }).run();
+  db.insert(users).values({ id: 'u1', createdAt: 0 }).run();
   db.insert(oauthTokens).values({
     userId: 'u1', accessToken: 'old-token', refreshToken, expiresAt, scopes: '',
   }).run();
   return db;
-}
-
-/**
- * Builds a fake (unsigned) ID token: header.payload.signature, where the
- * payload is the base64url encoding of the given JSON claims. decodeIdToken
- * only ever reads the payload segment, so the header/signature values are
- * arbitrary placeholders — never a real Google-issued token.
- */
-function fakeIdToken(payload: { sub: string; email: string }): string {
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  return `header.${encoded}.signature`;
 }
 
 function tokenResponse(body: Record<string, unknown>): Response {
@@ -43,13 +32,22 @@ function tokenResponse(body: Record<string, unknown>): Response {
 }
 
 describe('buildAuthUrl', () => {
-  it('requests both portability scopes plus openid and email', () => {
+  it('requests only the two Portability scopes -- openid and email must be absent', () => {
+    // This is the assertion that would have caught the original defect:
+    // Google rejects any scope request that mixes dataportability.* scopes
+    // with openid/email outright ("Requests for data portability scopes
+    // cannot have non data portability scopes."). Asserting the Portability
+    // scopes are present is not enough on its own -- a SCOPES list of
+    // ['openid', 'email', ...PORTABILITY_SCOPES] would still pass that half
+    // of the check while remaining completely broken against Google.
     const url = new URL(buildAuthUrl(config, 'state-1'));
     const scopes = url.searchParams.get('scope')!.split(' ');
-    expect(scopes).toContain('https://www.googleapis.com/auth/dataportability.saved.collections');
-    expect(scopes).toContain('https://www.googleapis.com/auth/dataportability.maps.starred_places');
-    expect(scopes).toContain('openid');
-    expect(scopes).toContain('email');
+    expect(scopes).toEqual([
+      'https://www.googleapis.com/auth/dataportability.saved.collections',
+      'https://www.googleapis.com/auth/dataportability.maps.starred_places',
+    ]);
+    expect(scopes).not.toContain('openid');
+    expect(scopes).not.toContain('email');
   });
 
   it('requests offline access and forces the consent prompt', () => {
@@ -122,8 +120,7 @@ describe('exchangeCode', () => {
     const fetch = vi.fn().mockResolvedValue(tokenResponse({
       access_token: 'access-1',
       expires_in: 3600,
-      scope: 'openid email',
-      id_token: fakeIdToken({ sub: 'sub-1', email: 'user@example.com' }),
+      scope: 'https://www.googleapis.com/auth/dataportability.saved.collections',
     }));
 
     await exchangeCode('auth-code', config, { fetch: fetch as never });
@@ -145,8 +142,7 @@ describe('exchangeCode', () => {
     const fetch = vi.fn().mockResolvedValue(tokenResponse({
       access_token: 'access-1',
       expires_in: 3600,
-      scope: 'openid email',
-      id_token: fakeIdToken({ sub: 'sub-1', email: 'user@example.com' }),
+      scope: 'https://www.googleapis.com/auth/dataportability.saved.collections',
     }));
 
     const tokens = await exchangeCode('auth-code', config, { fetch: fetch as never });
@@ -159,8 +155,7 @@ describe('exchangeCode', () => {
     const fetch = vi.fn().mockResolvedValue(tokenResponse({
       access_token: 'access-1',
       expires_in: 3600,
-      scope: 'openid email',
-      id_token: fakeIdToken({ sub: 'sub-1', email: 'user@example.com' }),
+      scope: 'https://www.googleapis.com/auth/dataportability.saved.collections',
     }));
 
     const tokens = await exchangeCode('auth-code', config, { fetch: fetch as never });
@@ -170,22 +165,28 @@ describe('exchangeCode', () => {
     expect(tokens.expiresAt).toBeLessThanOrEqual(after + 3600 * 1000);
   });
 
-  it('derives googleSub and email from the decoded id_token payload', async () => {
+  it('parses a token response that carries no id_token at all -- the normal shape for Portability-only consent', async () => {
+    // Google's own docs state that during this flow "your app does not know
+    // which Google Account was used to give consent" and the token is
+    // opaque -- so a real response here has no id_token field whatsoever.
+    // This must not throw and must not attempt to decode anything.
     const fetch = vi.fn().mockResolvedValue(tokenResponse({
       access_token: 'access-1',
       refresh_token: 'refresh-1',
       expires_in: 3600,
-      scope: 'openid email',
-      id_token: fakeIdToken({ sub: 'sub-42', email: 'someone@example.com' }),
+      scope: 'https://www.googleapis.com/auth/dataportability.saved.collections https://www.googleapis.com/auth/dataportability.maps.starred_places',
     }));
 
     const tokens = await exchangeCode('auth-code', config, { fetch: fetch as never });
 
-    expect(tokens.googleSub).toBe('sub-42');
-    expect(tokens.email).toBe('someone@example.com');
-    expect(tokens.accessToken).toBe('access-1');
-    expect(tokens.refreshToken).toBe('refresh-1');
-    expect(tokens.scopes).toBe('openid email');
+    expect(tokens).toEqual({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+      expiresAt: tokens.expiresAt,
+      scopes: 'https://www.googleapis.com/auth/dataportability.saved.collections https://www.googleapis.com/auth/dataportability.maps.starred_places',
+    });
+    expect(tokens).not.toHaveProperty('googleSub');
+    expect(tokens).not.toHaveProperty('email');
   });
 
   it('throws with the status but without the response body when the exchange fails', async () => {
@@ -261,80 +262,50 @@ describe('getValidAccessToken', () => {
 });
 
 describe('persistTokens', () => {
-  it('creates a new user on first auth with an id derived from googleSub', () => {
+  const baseTokens = {
+    accessToken: 'access-1',
+    refreshToken: 'refresh-1',
+    expiresAt: Date.now() + 600_000,
+    scopes: '',
+  };
+
+  it('creates a user with a generated (opaque) id, and stores the tokens against it', () => {
     const db = createDb(':memory:');
     migrate(db);
 
-    const userId = persistTokens(db, {
-      accessToken: 'access-1',
-      refreshToken: 'refresh-1',
-      expiresAt: Date.now() + 600_000,
-      scopes: '',
-      googleSub: 'sub-1',
-      email: 'new@example.com',
-    });
+    const userId = persistTokens(db, baseTokens);
 
-    expect(userId).toBe('user_sub-1');
-    const rows = db.select().from(users).where(eq(users.id, 'user_sub-1')).all();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.email).toBe('new@example.com');
-    expect(rows[0]!.googleSub).toBe('sub-1');
+    expect(userId).toBeTruthy();
+    // Not derived from anything Google returned -- there is nothing to
+    // derive it from. Just proving it's a real UUID, not e.g. undefined
+    // stringified or some other accidental fallback.
+    expect(userId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const userRows = db.select().from(users).where(eq(users.id, userId)).all();
+    expect(userRows).toHaveLength(1);
+    expect(userRows[0]).not.toHaveProperty('googleSub');
+    expect(userRows[0]).not.toHaveProperty('email');
+
+    const tokenRows = db.select().from(oauthTokens).where(eq(oauthTokens.userId, userId)).all();
+    expect(tokenRows).toHaveLength(1);
+    expect(tokenRows[0]!.accessToken).toBe('access-1');
+    expect(tokenRows[0]!.refreshToken).toBe('refresh-1');
   });
 
-  it('does not insert a second user row when the same googleSub authorizes twice', () => {
+  it('creates two rows when called twice -- this is the documented behavior now, not a bug', () => {
+    // Portability-only consent is anonymous (Google never says which account
+    // consented), so persistTokens has no way to recognize a returning user
+    // and must not try to. Every completed consent flow costs one new row.
+    // Pinning this so a future "helpful" dedup attempt is a deliberate,
+    // reviewed change rather than an accidental regression.
     const db = createDb(':memory:');
     migrate(db);
 
-    const base = {
-      expiresAt: Date.now() + 600_000,
-      scopes: '',
-      googleSub: 'sub-1',
-      email: 'new@example.com',
-    };
+    const firstId = persistTokens(db, baseTokens);
+    const secondId = persistTokens(db, { ...baseTokens, accessToken: 'access-2', refreshToken: 'refresh-2' });
 
-    persistTokens(db, { ...base, accessToken: 'access-1', refreshToken: 'refresh-1' });
-    persistTokens(db, { ...base, accessToken: 'access-2', refreshToken: 'refresh-2' });
-
+    expect(firstId).not.toBe(secondId);
     const rows = db.select().from(users).all();
-    expect(rows).toHaveLength(1);
-  });
-
-  it('replaces the stored refresh token when re-auth returns a new one', () => {
-    const db = seedDb(Date.now() + 600_000, 'old-refresh');
-
-    const userId = persistTokens(db, {
-      accessToken: 'new-access',
-      refreshToken: 'new-refresh',
-      expiresAt: Date.now() + 600_000,
-      scopes: '',
-      googleSub: 's',
-      email: 'a@b.com',
-    });
-
-    expect(userId).toBe('u1');
-    const stored = db.select().from(oauthTokens).where(eq(oauthTokens.userId, 'u1')).all();
-    expect(stored[0]!.refreshToken).toBe('new-refresh');
-  });
-
-  it('preserves the stored refresh token when re-auth omits one', () => {
-    // Google omits refresh_token on most exchanges once offline access has
-    // already been granted. If persistTokens overwrote unconditionally, this
-    // would null out a working refresh token and force a fresh browser
-    // consent on the next expiry — exactly the cost the one-time
-    // Portability authorization makes expensive.
-    const db = seedDb(Date.now() + 600_000, 'old-refresh');
-
-    persistTokens(db, {
-      accessToken: 'new-access',
-      refreshToken: null,
-      expiresAt: Date.now() + 600_000,
-      scopes: '',
-      googleSub: 's',
-      email: 'a@b.com',
-    });
-
-    const stored = db.select().from(oauthTokens).where(eq(oauthTokens.userId, 'u1')).all();
-    expect(stored[0]!.refreshToken).toBe('old-refresh');
-    expect(stored[0]!.accessToken).toBe('new-access');
+    expect(rows).toHaveLength(2);
   });
 });
