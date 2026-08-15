@@ -30,6 +30,10 @@ describe('searchText', () => {
     expect((init.headers as Record<string, string>)['X-Goog-Api-Key']).toBe('KEY');
     expect((init.headers as Record<string, string>)['X-Goog-FieldMask'])
       .toBe('places.id,places.displayName,places.formattedAddress,places.primaryType,places.types,places.location,places.addressComponents');
+
+    const body = JSON.parse(init.body as string);
+    expect(body.maxResultCount).toBe(1);
+    expect(body.languageCode).toBe('en');
   });
 
   it('includes a 500m locationBias circle when coordinates are given', async () => {
@@ -77,6 +81,15 @@ describe('searchText', () => {
       { apiKey: 'KEY', fetch: fetch as never, maxRetries: 2, sleep: noSleep });
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(result).toBeNull();
+  });
+
+  it('backs off exponentially between retries, not at a constant delay', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('boom', { status: 500 }));
+    const sleep = vi.fn(async () => {});
+    await searchText({ text: 'x' },
+      { apiKey: 'KEY', fetch: fetch as never, maxRetries: 3, sleep });
+
+    expect(sleep.mock.calls).toEqual([[250], [500], [1000]]);
   });
 
   it('does not retry a 403 — that is a billing or key problem', async () => {

@@ -44,12 +44,15 @@ describe('enrich', () => {
 
   it('keeps unresolved items with category Unknown', async () => {
     const fetch = vi.fn().mockResolvedValue(ok({}));
-    const [place] = await enrich([item({ title: 'Ghost Bar', note: 'keep me' })],
-      { apiKey: 'K', fetch: fetch as never, sleep: noSleep });
+    const [place] = await enrich([item({
+      title: 'Ghost Bar', note: 'keep me',
+      mapsUrl: 'https://maps.google.com/?cid=123', lat: 41.1, lng: 2.2,
+    })], { apiKey: 'K', fetch: fetch as never, sleep: noSleep });
 
     expect(place).toMatchObject({
       placeId: null, name: 'Ghost Bar', category: 'Unknown',
       city: null, resolved: false, note: 'keep me',
+      mapsUrl: 'https://maps.google.com/?cid=123', lat: 41.1, lng: 2.2,
     });
   });
 
@@ -82,5 +85,32 @@ describe('enrich', () => {
       item({ sourceId: 'b', title: 'Same Place' }),
     ], { apiKey: 'K', fetch: fetch as never, sleep: noSleep });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  describe('note merging on dedupe', () => {
+    const mergedNote = async (note1: string | undefined, note2: string | undefined) => {
+      const fetch = vi.fn().mockResolvedValue(ok(cafe('ChIJnote')));
+      const places = await enrich([
+        item({ sourceId: 'a', note: note1 }),
+        item({ sourceId: 'b', note: note2 }),
+      ], { apiKey: 'K', fetch: fetch as never, sleep: noSleep });
+      return places[0]!.note;
+    };
+
+    it('keeps the first note when the second has none', async () => {
+      expect(await mergedNote('first note', undefined)).toBe('first note');
+    });
+
+    it('keeps the second note when the first has none', async () => {
+      expect(await mergedNote(undefined, 'second note')).toBe('second note');
+    });
+
+    it('joins two different notes with an em dash', async () => {
+      expect(await mergedNote('first note', 'second note')).toBe('first note — second note');
+    });
+
+    it('does not duplicate an identical note', async () => {
+      expect(await mergedNote('same note', 'same note')).toBe('same note');
+    });
   });
 });
