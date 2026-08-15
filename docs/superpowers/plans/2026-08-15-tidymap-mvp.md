@@ -1694,8 +1694,12 @@ export function migrate(db: Db): void {
      )`,
   ];
 
+  // db.run() accepts a raw SQL string and is what drizzle's own migrators use.
+  // Do NOT reach for db.$client — it exists only on the intersection type
+  // drizzle() returns, so using it would force widening the exported Db type
+  // and leak the raw driver handle to every consumer.
   for (const statement of statements) {
-    db.$client.exec(statement);
+    db.run(statement);
   }
 }
 ```
