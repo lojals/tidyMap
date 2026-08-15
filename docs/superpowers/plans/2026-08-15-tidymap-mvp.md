@@ -48,7 +48,7 @@
 | `src/config.ts` | Env parsing, fail-fast validation |
 | `src/context.ts` | `AppContext` — the `{ db, config }` handle passed to routes and the pipeline |
 | `src/server.ts` | Fastify assembly + entrypoint |
-| `fixtures/` | Sample export + recorded Places responses |
+| `fixtures/` | Sample Portability export only. Recorded Places responses were specified but never built — fixture mode still calls the real Places API |
 
 ---
 

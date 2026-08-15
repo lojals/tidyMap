@@ -71,7 +71,7 @@ GET  /auth/google                  → 302 to Google consent
 GET  /auth/google/callback         → exchange code, persist tokens
 POST /auth/reset                   → reset Portability consent (allows re-export)
 POST /extractions                  → { jobId }
-GET  /extractions/:jobId           → { status, progress, error? }
+GET  /extractions/:jobId           → { jobId, status, archiveJobId, error, warnings }
 GET  /extractions/:jobId/results   → grouped JSON (?groupBy=category|city|country)
 ```
 
@@ -196,7 +196,7 @@ table surface from real data rather than speculation.
 
 | Failure | Behavior |
 |---|---|
-| Second `initiate` without reset | 409 with explicit "consent already used, POST /auth/reset" |
+| Second `initiate` without reset | Surfaces as `status: "failed"` on `GET /extractions/:jobId`, carrying the guidance text. **Not** a 409 from `POST /extractions` — the pipeline is asynchronous, so that endpoint has already returned 202 before `initiateArchive` runs |
 | Archive `FAILED` / `CANCELLED` | Job → `failed`, carrying the state Google reported. The `archiveJobs` state response exposes no free-text reason field, so `FAILED` vs `CANCELLED` is the entire signal available — do not promise more |
 | Poll exceeds 15 min | Job → `timed_out`, **jobId retained** so polling resumes. Never re-initiate — that burns the consent |
 | Places returns no match | Item kept with `resolved: false`. Not an error |
@@ -209,9 +209,19 @@ table surface from real data rather than speculation.
 ## Fixture mode
 
 `PORTABILITY_SOURCE=fixture` reads a committed sample export from `fixtures/` instead of
-calling Google, and `enrich/` reads recorded Places responses. This exists because the
-one-time authorization makes every real run cost a browser-based consent reset —
-without it, iterating on parsing logic is untenable.
+calling Google. This exists because the one-time authorization makes every real run cost
+a browser-based consent reset — without it, iterating on parsing logic is untenable.
+
+**Fixture mode replaces the Portability export only — not the Places API.** An earlier
+draft of this spec claimed `enrich/` would read recorded Places responses; that was never
+built and no task was ever assigned it. A valid `GOOGLE_PLACES_API_KEY` is therefore
+required even in fixture mode, and every fixture run bills real Places calls. Two
+consequences worth stating plainly: there is no fully offline development mode, and a
+recorded-response layer remains the obvious Phase 2 improvement.
+
+Fixture mode also does not remove the need for a `users` row, which only the OAuth
+callback creates — so "run without Google" still needs one real consent round-trip first,
+or manual database seeding.
 
 ## Testing
 
@@ -219,7 +229,7 @@ without it, iterating on parsing logic is untenable.
   for US, UK, Spain, and Japan (the `locality` fallback chain is the fragile part).
 - **Integration** — full parse → enrich → group over committed fixtures, no network,
   asserting the exact JSON contract above.
-- **Recorded responses** — one real Places response per category bucket.
+- **Recorded Places responses** — not built. See Fixture mode above; deferred to Phase 2.
 - **Manual E2E** — a documented runbook against a real account, executed once after GCP setup.
 
 ## Prerequisites (greenfield — nothing exists yet)
