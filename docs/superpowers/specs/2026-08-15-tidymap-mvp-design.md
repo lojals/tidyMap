@@ -204,6 +204,7 @@ table surface from real data rather than speculation.
 | Expired refresh token | 401 with re-auth link |
 | Places API key missing | Rejected at startup by config validation, naming the variable |
 | Places billing not enabled | The first 403 throws and aborts the extraction with an explicit billing message. Not retried — every later call would fail identically, so 20 confusing 403s are avoided without a paid startup probe |
+| Places key present but invalid | Google returns **400 `API_KEY_INVALID`**, not 401/403 — verified against the live API during Task 12. A 400 is neither in the throw branch nor retryable, so it falls through to `return null` and silently marks every place unresolved. Must be treated as fatal alongside 401/403 |
 
 ## Fixture mode
 
