@@ -56,6 +56,28 @@ describe('extractCity', () => {
   it('returns null for undefined input', () => {
     expect(extractCity(undefined)).toBeNull();
   });
+
+  it('does not throw and skips a component missing `types` entirely', () => {
+    // The Places response is cast with `as` and never validated at runtime,
+    // so a component can genuinely arrive without a `types` array.
+    expect(extractCity([
+      { longText: 'Mystery', shortText: 'Mystery' } as AddressComponent,
+      c('Girona', 'Girona', 'administrative_area_level_2'),
+    ])).toBe('Girona');
+  });
+
+  it('skips a component whose types match but which lacks longText, continuing the fallback chain', () => {
+    expect(extractCity([
+      { shortText: 'SF', types: ['locality'] } as AddressComponent,
+      c('Fallback City', 'FC', 'administrative_area_level_2'),
+    ])).toBe('Fallback City');
+  });
+
+  it('returns null, not undefined, when the only matching component lacks longText', () => {
+    expect(extractCity([
+      { shortText: 'SF', types: ['locality'] } as AddressComponent,
+    ])).toBeNull();
+  });
 });
 
 describe('extractCountry', () => {
@@ -70,5 +92,17 @@ describe('extractCountry', () => {
 
   it('returns null for undefined input', () => {
     expect(extractCountry(undefined)).toBeNull();
+  });
+
+  it('does not throw and returns null for a component missing `types` entirely', () => {
+    expect(extractCountry([
+      { longText: 'Mystery', shortText: 'Mystery' } as AddressComponent,
+    ])).toBeNull();
+  });
+
+  it('skips a country component that lacks longText, returning null rather than a name of undefined', () => {
+    expect(extractCountry([
+      { shortText: 'ES', types: ['country'] } as AddressComponent,
+    ])).toBeNull();
   });
 });

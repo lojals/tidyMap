@@ -1,8 +1,17 @@
-/** Places API (New) address component. Note longText/shortText, not long_name/short_name. */
+/**
+ * Places API (New) address component. Note longText/shortText, not
+ * long_name/short_name.
+ *
+ * `types` is optional because the caller (places-client.ts) casts the raw
+ * HTTP response with `as` and never validates it at runtime -- Google's
+ * actual response is not guaranteed to match this shape. The type reflects
+ * that: every field here may be genuinely absent on a live response, so
+ * every read site below guards accordingly instead of trusting the cast.
+ */
 export interface AddressComponent {
-  longText: string;
-  shortText: string;
-  types: string[];
+  longText?: string;
+  shortText?: string;
+  types?: string[];
 }
 
 /**
@@ -15,8 +24,13 @@ export function extractCity(components: AddressComponent[] | undefined): string 
   if (!components) return null;
 
   for (const type of CITY_TYPES) {
-    const match = components.find((component) => component.types.includes(type));
-    if (match) return match.longText;
+    const match = components.find((component) => component.types?.includes(type));
+    // A component that matches on `types` but is missing `longText` does not
+    // carry a usable city name. Falling through to the next type in the
+    // chain (rather than returning `match.longText`, which would be
+    // `undefined`) keeps the return type honest: `string | null`, never
+    // `string | undefined`.
+    if (match?.longText) return match.longText;
   }
   return null;
 }
@@ -26,6 +40,7 @@ export function extractCountry(
 ): { name: string; code: string } | null {
   if (!components) return null;
 
-  const match = components.find((component) => component.types.includes('country'));
-  return match ? { name: match.longText, code: match.shortText } : null;
+  const match = components.find((component) => component.types?.includes('country'));
+  if (!match?.longText || !match.shortText) return null;
+  return { name: match.longText, code: match.shortText };
 }

@@ -30,6 +30,23 @@ function setStatus(ctx: AppContext, id: string, status: string, extra: Record<st
 }
 
 /**
+ * Runs one pipeline stage and, on failure, re-throws with the stage name
+ * prefixed onto the original message (e.g. `enrich: Cannot read properties
+ * of undefined...`). The stored `error` column is served verbatim over HTTP,
+ * so this stays a plain string prefix -- no stack trace, no wrapped Error
+ * object -- just enough to say *where* in the pipeline a live failure
+ * happened without grepping for the underlying message across every stage.
+ */
+async function withStage<T>(stage: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${stage}: ${message}`);
+  }
+}
+
+/**
  * Logs and summarizes the non-fatal diagnostics recorded by the parse and
  * enrich stages: files that could not be parsed (skippedFiles, a per-file
  * failure that must not abort the whole extraction -- "never drop a place")
@@ -167,7 +184,7 @@ export async function runExtraction(
     resetSkippedFiles();
     resetUnmappedCounts();
 
-    const files = await fetchExportFiles(ctx, extractionId, userId, deps);
+    const files = await withStage('archive', () => fetchExportFiles(ctx, extractionId, userId, deps));
     if (files === 'timed_out') {
       setStatus(ctx, extractionId, 'timed_out', {
         error: 'Archive was not ready within 15 minutes. Poll GET /extractions/:id again later.',
@@ -185,13 +202,13 @@ export async function runExtraction(
       }).run();
     }
 
-    const items = parseExport(files, ctx.config.extractionLimit);
+    const items = await withStage('parse', async () => parseExport(files, ctx.config.extractionLimit));
 
-    const resolved = await enrich(items, {
+    const resolved = await withStage('enrich', () => enrich(items, {
       apiKey: ctx.config.placesApiKey,
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
       ...(deps.sleep ? { sleep: deps.sleep } : {}),
-    });
+    }));
 
     const warnings = summarizeWarnings(extractionId);
 
