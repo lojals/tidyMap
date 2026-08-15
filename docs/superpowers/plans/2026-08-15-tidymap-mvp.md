@@ -3099,7 +3099,9 @@ export function buildServer(ctx: AppContext, deps: JobRouteDeps = {}): FastifyIn
   app.register(async (instance) => authRoutes(instance, ctx));
   app.register(async (instance) => jobRoutes(instance, ctx, deps));
 
-  app.setErrorHandler((error, _request, reply) => {
+  // The `: Error` annotation is required: Fastify 5's setErrorHandler defaults
+  // its TError generic to `unknown` (v4 defaulted to FastifyError).
+  app.setErrorHandler((error: Error, _request, reply) => {
     const status = error.name === 'ReauthRequiredError' ? 401
       : error.name === 'ConsentAlreadyUsedError' ? 409
       : 500;
