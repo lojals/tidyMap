@@ -1962,7 +1962,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
 import { downloadArchive } from './download.js';
 
-const bin = (bytes: Uint8Array) => new Response(bytes, { status: 200 });
+// Uint8Array<ArrayBuffer>, not bare Uint8Array: TS 5.9 made Uint8Array generic
+// over its buffer type, and DOM's BodyInit requires an ArrayBuffer-backed view.
+const bin = (bytes: Uint8Array<ArrayBuffer>) => new Response(bytes, { status: 200 });
 
 describe('downloadArchive', () => {
   it('unzips a zip response into its member files', async () => {
