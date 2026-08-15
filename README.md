@@ -37,6 +37,25 @@ so every live run costs a browser consent round-trip. Note that a valid
 `GOOGLE_PLACES_API_KEY` is still required in fixture mode — see
 [docs/gcp-setup.md](docs/gcp-setup.md).
 
+**Gap:** fixture mode still needs a `users` row to exist before you can call
+`POST /extractions` — that route looks up `userId` in the `users` table and
+returns `400` for an unknown one, and the *only* code path that inserts a
+`users` row is the `/auth/google/callback` handler in `src/auth/routes.ts`.
+So "run without Google" is not actually Google-free end to end: you must
+either complete one real consent round-trip at `GET /auth/google` first (to
+mint a `userId`), or seed a `users` row into the SQLite database by hand
+before your first `POST /extractions`. `PORTABILITY_SOURCE=fixture` only
+skips the Portability Archive API for that user's *extractions* — it does not
+skip account creation.
+
+If you build from source (`npm run build && npm start`), fixture mode also
+needs `fixtures/` to exist next to `dist/` at the repo root — `npm run build`
+(plain `tsc`) does not copy it, since it is not a `.ts` source file. Running
+`node dist/server.js` from within a full checkout of this repo works (fixture
+resolution is anchored to the compiled module's own location, not the
+working directory you launch it from); a `dist/` shipped on its own, without
+the rest of the repository, cannot use fixture mode.
+
 ## OAuth flow and CSRF protection
 
 `GET /auth/google` mints a random `state` value, stores it in the
@@ -98,7 +117,9 @@ in the commit or PR that records the live run:
 - **Which `primaryType` values landed in `Unknown`** — group by `category`,
   look at the `Unknown` bucket, and read each place's `primaryType` field.
   Each one is a gap in the taxonomy table (`src/categorize/taxonomy.ts`)
-  worth filling.
+  worth filling. `GET /extractions/JOB_ID` also reports these directly, in
+  its nullable `warnings` field, alongside any export file that could not be
+  parsed — no need to hunt through the grouped results by hand.
 - **Whether saved-collection items without coordinates resolved to the right
   city** — saved-collection rows carry no lat/lng (only starred places do;
   see `src/parse/saved-collections.ts` vs `src/parse/starred-places.ts`), so
@@ -106,14 +127,27 @@ in the commit or PR that records the live run:
   Spot-check a few `city` values in the `groupBy=city` output against where
   you actually saved them.
 
-If `POST /extractions` returns `409` instead of `202`, see "Re-running an
-extraction" below — it means a prior authorization is still on file.
+If `GET /extractions/JOB_ID` reports `status: "failed"` with an `error`
+mentioning `RESOURCE_EXHAUSTED`, see "Re-running an extraction" below — it
+means a prior authorization is still on file.
 
 ## Re-running an extraction
 
 Portability authorization is `ACCESS_TYPE_ONE_TIME`. A second extraction
-attempt against the same authorization surfaces as a `409` (mapped from
-Google's `RESOURCE_EXHAUSTED` response). To run again:
+attempt against the same authorization surfaces as a *failed* extraction, not
+an HTTP error response: `POST /extractions` runs the pipeline in the
+background and always returns `202` at once (poll for the outcome), so a
+spent authorization cannot come back as a synchronous error from that call.
+Instead, poll `GET /extractions/JOB_ID` until `status` is `"failed"`, and read
+the guidance in its `error` field — it names both possible causes (Google
+returns `RESOURCE_EXHAUSTED` for both a spent one-time authorization and
+ordinary rate limiting) and spells out the next step. (The server also maps a
+`RESOURCE_EXHAUSTED` error to a `409` in its central error handler, but no
+route wired up today can actually reach that path with this error — it
+documents the intent for a future synchronous call site, not current
+behavior.)
+
+To reset:
 
 ```bash
 curl -X POST http://localhost:3000/auth/reset \
@@ -128,8 +162,9 @@ tokens, so consent must be repeated.
 authorization *and* ordinary rate limiting — the two cases are
 indistinguishable from the response alone. `POST /auth/reset` is destructive:
 it invalidates the token even if it was still valid. If you have **not** just
-run an extraction and still get a `409`, wait and retry before resetting —
-only reset once you're confident the authorization really has been spent.
+run an extraction and still see this failure, wait and retry before
+resetting — only reset once you're confident the authorization really has
+been spent.
 
 If an archive job itself fails, `GET /extractions/:jobId` reports
 `status: "failed"` or `status: "timed_out"` with only that status — Google's
