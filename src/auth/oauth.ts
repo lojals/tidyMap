@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/client.js';
 import { oauthStates, oauthTokens, users } from '../db/schema.js';
@@ -47,8 +47,18 @@ export function buildAuthUrl(config: Config, state: string): string {
 /** Ten minutes. A consent round-trip that takes longer than this has been abandoned. */
 const STATE_TTL_MS = 10 * 60 * 1000;
 
+/**
+ * Mints a new state and, as a side effect, reaps rows old enough that they
+ * could never validate (consumeAuthState rejects anything past STATE_TTL_MS
+ * regardless). Without this, oauth_states grows by one row per
+ * GET /auth/google forever -- a row is only ever removed when that exact
+ * state reaches the callback, so an abandoned consent flow leaves its row
+ * behind permanently. Piggybacking the cleanup on the next state creation
+ * avoids adding a background timer for what is otherwise a handful of rows.
+ */
 export function createAuthState(db: Db): string {
   const state = randomBytes(32).toString('base64url');
+  db.delete(oauthStates).where(lt(oauthStates.createdAt, Date.now() - STATE_TTL_MS)).run();
   db.insert(oauthStates).values({ state, createdAt: Date.now() }).run();
   return state;
 }

@@ -4,7 +4,7 @@ import {
   persistTokens,
 } from './oauth.js';
 import { createDb, migrate } from '../db/client.js';
-import { users, oauthTokens } from '../db/schema.js';
+import { users, oauthTokens, oauthStates } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 
@@ -91,6 +91,29 @@ describe('createAuthState / consumeAuthState', () => {
     migrate(db);
 
     expect(consumeAuthState(db, undefined)).toBe(false);
+  });
+
+  it('reaps expired rows as a side effect of minting a new state, so oauth_states does not grow unbounded', () => {
+    // A row is otherwise only ever removed when its exact state reaches the
+    // callback -- an abandoned consent flow (browser closed, tab left open)
+    // would leave its row behind forever with nothing to clean it up.
+    const db = createDb(':memory:');
+    migrate(db);
+
+    db.insert(oauthStates).values({
+      state: 'long-abandoned',
+      createdAt: Date.now() - 11 * 60 * 1000, // older than the 10-minute TTL
+    }).run();
+    db.insert(oauthStates).values({
+      state: 'recent',
+      createdAt: Date.now() - 60 * 1000, // within the TTL -- must survive
+    }).run();
+
+    createAuthState(db);
+
+    const remaining = db.select().from(oauthStates).all().map((r) => r.state);
+    expect(remaining).not.toContain('long-abandoned');
+    expect(remaining).toContain('recent');
   });
 });
 
