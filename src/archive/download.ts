@@ -8,6 +8,15 @@ function isZip(bytes: Uint8Array): boolean {
     bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
 }
 
+/**
+ * Names a single (non-zip) file from its signed URL's path. Assumes Cloud
+ * Storage object URLs always carry a real basename; if that assumption ever
+ * fails, this falls back to the literal string 'export'. A file named
+ * 'export' has no .csv/.json extension, so parseExport silently ignores it
+ * and it won't even appear in skippedFiles() — a genuine place-bearing file
+ * could be dropped with no diagnostic. Accepted as unlikely given how signed
+ * Cloud Storage URLs are shaped, not because the risk is zero.
+ */
 function nameFromUrl(url: string): string {
   try {
     return decodeURIComponent(basename(new URL(url).pathname)) || 'export';
