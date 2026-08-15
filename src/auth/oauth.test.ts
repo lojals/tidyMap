@@ -62,6 +62,17 @@ describe('buildAuthUrl', () => {
     const url = new URL(buildAuthUrl(config, 'state-xyz'));
     expect(url.searchParams.get('state')).toBe('state-xyz');
   });
+
+  it('redirects to Google\'s own OAuth endpoint, not some other host', () => {
+    // Every prior test here only inspected searchParams, so nothing pinned
+    // AUTH_ENDPOINT itself -- changing it to an attacker-controlled host
+    // would leave the rest of this file green while redirecting the user's
+    // consent flow elsewhere. Proven load-bearing: temporarily pointing
+    // AUTH_ENDPOINT at another host fails this assertion (verified by hand
+    // during this fix, then reverted).
+    const url = new URL(buildAuthUrl(config, 'state-1'));
+    expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+  });
 });
 
 describe('createAuthState / consumeAuthState', () => {
