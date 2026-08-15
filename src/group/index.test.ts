@@ -32,12 +32,23 @@ describe('group', () => {
     expect(result.results.map((g) => g['city'])).toEqual(['Barcelona', 'Lisbon']);
   });
 
-  it('orders groups by descending place count', () => {
+  it('groups by country using "country" as the key', () => {
     const result = group(
-      [place({ city: 'Lisbon' }), place({ city: 'Porto' }), place({ city: 'Lisbon' })],
+      [place({ country: 'Portugal' }), place({ country: null, resolved: false })],
+      'country',
+    );
+    expect(result.results.map((g) => g['country']).sort()).toEqual(['Portugal', 'Unknown']);
+  });
+
+  it('orders by descending count even when that fights alphabetical order', () => {
+    // Porto must outrank Amsterdam on count alone, despite A < P. Using two
+    // cities whose count and alphabetical order agree would pass under a
+    // comparator that ignored count entirely.
+    const result = group(
+      [place({ city: 'Porto' }), place({ city: 'Amsterdam' }), place({ city: 'Porto' })],
       'city',
     );
-    expect(result.results[0]!['city']).toBe('Lisbon');
+    expect(result.results.map((g) => g['city'])).toEqual(['Porto', 'Amsterdam']);
     expect((result.results[0]!['places'] as ResolvedPlace[]).length).toBe(2);
   });
 
