@@ -53,16 +53,18 @@ describe('extraction endpoints', () => {
 
     const created = await startExtraction(app);
     expect(created.statusCode).toBe(202);
-    const { jobId } = created.json<{ jobId: string }>();
-    expect(jobId).toBeTruthy();
+    const createdBody = created.json<{ jobId: string; status: string }>();
+    expect(createdBody.jobId).toBeTruthy();
+    expect(createdBody.status).toBe('pending');
 
-    const status = await app.inject({ method: 'GET', url: `/extractions/${jobId}` });
+    const status = await app.inject({ method: 'GET', url: `/extractions/${createdBody.jobId}` });
     expect(status.json<{ status: string }>().status).toBe('complete');
 
-    const results = await app.inject({ method: 'GET', url: `/extractions/${jobId}/results` });
+    const results = await app.inject({ method: 'GET', url: `/extractions/${createdBody.jobId}/results` });
     const body = results.json<GroupedResult>();
     expect(body.groupBy).toBe('category');
     expect(body.totalPlaces).toBeGreaterThan(0);
+    expect(body.unresolvedCount).toBe(0);
     expect(body.results[0]!['category']).toBe('Food & Drink');
     expect((body.results[0]!['places'] as ResolvedPlace[])[0]!.placeId).toBe('ChIJfixture');
   });
@@ -76,6 +78,12 @@ describe('extraction endpoints', () => {
     });
     expect(byCity.json<GroupedResult>().groupBy).toBe('city');
     expect(byCity.json<GroupedResult>().results[0]!['city']).toBe('Barcelona');
+
+    const byCountry = await app.inject({
+      method: 'GET', url: `/extractions/${jobId}/results?groupBy=country`,
+    });
+    expect(byCountry.json<GroupedResult>().groupBy).toBe('country');
+    expect(byCountry.json<GroupedResult>().results[0]!['country']).toBe('Spain');
   });
 
   it('rejects an unknown groupBy with 400', async () => {

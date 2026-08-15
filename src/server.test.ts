@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildServer } from './server.js';
 import { createDb, migrate } from './db/client.js';
+import { users } from './db/schema.js';
 import { loadConfig } from './config.js';
 import { ReauthRequiredError } from './auth/oauth.js';
 import { ConsentAlreadyUsedError } from './portability/client.js';
@@ -13,18 +14,34 @@ function buildTestServer() {
     GOOGLE_REDIRECT_URI: 'http://localhost:3000/auth/google/callback',
     GOOGLE_PLACES_API_KEY: 'k', DATABASE_URL: ':memory:',
   });
-  return buildServer({ db, config });
+  return { app: buildServer({ db, config }), db };
 }
 
 // buildServer's error handler maps error names to HTTP statuses. No route
-// wired up today happens to let ReauthRequiredError or ConsentAlreadyUsedError
-// reach it (auth/reset's ReauthRequiredError is the only real path; nothing
-// currently lets ConsentAlreadyUsedError escape runExtraction's try/catch), so
-// this exercises the mapping directly with a throwing test route rather than
-// relying on those call sites to stay wired the way they are today.
+// wired up today happens to let ConsentAlreadyUsedError reach it (nothing
+// currently lets it escape runExtraction's try/catch), so that mapping is
+// exercised with a throwing test route rather than a real call site.
+// ReauthRequiredError, in contrast, IS reachable in production -- POST
+// /auth/reset calls getValidAccessToken unguarded -- so it gets both: a
+// synthetic-route test pinning the exact mapping/message, and a real-route
+// test proving the production wiring actually reaches that mapping.
 describe('buildServer error handler', () => {
+  it('maps ReauthRequiredError to 401 through a real route (POST /auth/reset for a user with no stored tokens)', async () => {
+    const { app, db } = buildTestServer();
+    db.insert(users).values({ id: 'u1', googleSub: 's', email: 'a@b.com', createdAt: 0 }).run();
+
+    // No oauthTokens row exists for u1, so getValidAccessToken throws
+    // ReauthRequiredError('No tokens stored for this user.') unguarded --
+    // this is the actual production call site, not a synthetic route.
+    const response = await app.inject({
+      method: 'POST', url: '/auth/reset', payload: { userId: 'u1' },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
   it('maps ReauthRequiredError to 401', async () => {
-    const app = buildTestServer();
+    const { app } = buildTestServer();
     app.get('/__test/reauth', async () => {
       throw new ReauthRequiredError('re-auth needed');
     });
@@ -35,7 +52,7 @@ describe('buildServer error handler', () => {
   });
 
   it('maps ConsentAlreadyUsedError to 409', async () => {
-    const app = buildTestServer();
+    const { app } = buildTestServer();
     app.get('/__test/consent', async () => {
       throw new ConsentAlreadyUsedError();
     });
@@ -45,7 +62,7 @@ describe('buildServer error handler', () => {
   });
 
   it('maps an unrecognized error to 500', async () => {
-    const app = buildTestServer();
+    const { app } = buildTestServer();
     app.get('/__test/boom', async () => {
       throw new Error('boom');
     });
