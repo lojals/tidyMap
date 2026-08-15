@@ -55,7 +55,8 @@
 ## Task 1: Scaffold, domain types, and categorization
 
 **Files:**
-- Create: `package.json`, `tsconfig.json`, `vitest.config.ts`, `.gitignore`, `.env.example`
+- Create: `package.json`, `tsconfig.json`, `.gitignore`, `.env.example`
+  (no `vitest.config.ts` — Vitest's default include glob already covers `src/**/*.test.ts`)
 - Create: `src/domain/types.ts`, `src/categorize/taxonomy.ts`
 - Test: `src/categorize/taxonomy.test.ts`
 
