@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import { sql } from 'drizzle-orm';
 import * as schema from './schema.js';
 
 export type Db = BetterSQLite3Database<typeof schema>;
@@ -9,6 +10,20 @@ export function createDb(url: string): Db {
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
   return drizzle(sqlite, { schema });
+}
+
+/**
+ * SQLite has no ALTER TABLE ... ADD COLUMN IF NOT EXISTS, and CREATE TABLE
+ * IF NOT EXISTS silently does nothing when the table already exists — so a
+ * column added after someone has already run the app never appears in their
+ * database, and every read fails on the missing column. Guarded with
+ * PRAGMA table_info rather than a try/catch around the ALTER so this stays
+ * declarative and does not swallow a real failure (e.g. a locked database).
+ */
+function addColumnIfMissing(db: Db, table: string, column: string, definition: string): void {
+  const existing = db.all<{ name: string }>(sql.raw(`PRAGMA table_info(${table})`));
+  if (existing.some((c) => c.name === column)) return;
+  db.run(sql.raw(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`));
 }
 
 /**
@@ -65,4 +80,10 @@ export function migrate(db: Db): void {
   for (const statement of statements) {
     db.run(statement);
   }
+
+  // extractions.warnings was added after the initial schema shipped. The
+  // CREATE TABLE IF NOT EXISTS above is a no-op against a database that
+  // already has the extractions table, so the column needs its own
+  // idempotent step to reach a pre-existing database.
+  addColumnIfMissing(db, 'extractions', 'warnings', 'TEXT');
 }

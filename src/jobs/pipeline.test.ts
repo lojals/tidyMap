@@ -326,6 +326,49 @@ describe('runExtraction warnings', () => {
     expect(row.warnings).toBeNull();
   });
 
+  it('ends failed with the skipped file named in warnings and the failure reason still in error', async () => {
+    // Before this fix, summarizeWarnings only ran on the success path, so a
+    // run that skipped a corrupt file and then failed reported nothing about
+    // the skip -- exactly the run where that context matters most. This
+    // combines both: bad.json is skipped during parse (recorded in the
+    // process-global skippedFiles registry), then the Places call 403s,
+    // which throws and lands in runExtraction's catch block.
+    const ctx = ctxWith('live', { EXTRACTION_LIMIT: '20' });
+    withStoredToken(ctx.db);
+
+    const fetch = vi.fn().mockImplementation(async (url: string | URL) => {
+      const href = String(url);
+      if (href.includes('portabilityArchive:initiate')) {
+        return new Response(JSON.stringify({ archiveJobId: 'job-1', accessType: 'ACCESS_TYPE_ONE_TIME' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (href.includes('portabilityArchiveState')) {
+        return new Response(JSON.stringify({
+          state: 'COMPLETE',
+          urls: ['https://signed/good.csv', 'https://signed/bad.json'],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (href === 'https://signed/good.csv') {
+        return new Response('title,item_content_url\nGood Place,https://www.google.com/maps/place/Good/\n', { status: 200 });
+      }
+      if (href === 'https://signed/bad.json') {
+        return new Response('{ not json at all', { status: 200 });
+      }
+      if (href.includes('places:searchText')) {
+        return new Response('denied', { status: 403 });
+      }
+      throw new Error(`unexpected fetch to ${href}`);
+    });
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('failed');
+    expect(row.error).toMatch(/403/);
+    expect(row.warnings).toContain('bad.json');
+  });
+
   it('reports an unmapped primaryType in warnings', async () => {
     const ctx = ctxWith('live', { EXTRACTION_LIMIT: '20' });
     withStoredToken(ctx.db);

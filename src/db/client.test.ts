@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createDb, migrate } from './client.js';
 import { users, extractions, oauthTokens, rawArtifacts, places, oauthStates } from './schema.js';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { ResolvedPlace } from '../domain/types.js';
 
 describe('createDb', () => {
@@ -27,6 +27,62 @@ describe('createDb', () => {
     const db = createDb(':memory:');
     migrate(db);
     expect(() => migrate(db)).not.toThrow();
+  });
+
+  it('is idempotent — migrating three times does not throw and does not duplicate the warnings column', () => {
+    const db = createDb(':memory:');
+    migrate(db);
+    migrate(db);
+    migrate(db);
+
+    const columns = db.all<{ name: string }>(sql.raw('PRAGMA table_info(extractions)'));
+    expect(columns.filter((c) => c.name === 'warnings')).toHaveLength(1);
+  });
+
+  // Regression test for a real bug: extractions.warnings was added to
+  // schema.ts and to migrate()'s CREATE TABLE, but CREATE TABLE IF NOT
+  // EXISTS is a no-op against a database that already has the extractions
+  // table -- so every developer who had already run the app before this
+  // column was added kept a table with no warnings column, and every
+  // subsequent select (drizzle always emits an explicit column list, never
+  // SELECT *) failed with "no such column: warnings". This builds that
+  // pre-existing, pre-warnings database by hand, then proves the real
+  // migrate() reaches it.
+  it('adds the warnings column to a database created before it existed', () => {
+    const db = createDb(':memory:');
+
+    // The original schema, before extractions.warnings existed -- deliberately
+    // NOT calling migrate() here, since that would create the column from the
+    // start and defeat the point of this test.
+    db.run(`CREATE TABLE users (
+       id TEXT PRIMARY KEY,
+       google_sub TEXT NOT NULL UNIQUE,
+       email TEXT NOT NULL,
+       created_at INTEGER NOT NULL
+     )`);
+    db.run(`CREATE TABLE extractions (
+       id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id),
+       status TEXT NOT NULL,
+       archive_job_id TEXT,
+       error TEXT,
+       created_at INTEGER NOT NULL,
+       updated_at INTEGER NOT NULL
+     )`);
+
+    migrate(db);
+
+    db.insert(users).values({
+      id: 'u7', googleSub: 'sub-7', email: 'g@h.com', createdAt: 1,
+    }).run();
+    db.insert(extractions).values({
+      id: 'e7', userId: 'u7', status: 'complete', createdAt: 1, updatedAt: 1,
+      warnings: 'Skipped 1 unparseable file(s): bad.json (Unexpected token)',
+    }).run();
+
+    const found = db.select().from(extractions).where(eq(extractions.id, 'e7')).all();
+    expect(found).toHaveLength(1);
+    expect(found[0]!.warnings).toBe('Skipped 1 unparseable file(s): bad.json (Unexpected token)');
   });
 
   it('enforces foreign keys — inserting an extraction for a nonexistent user throws', () => {
