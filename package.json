@@ -16,12 +16,15 @@
   "license": "ISC",
   "type": "module",
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0",
     "tsx": "^4.23.12",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
   },
   "dependencies": {
-    "csv-parse": "^7.0.2"
+    "better-sqlite3": "^13.0.3",
+    "csv-parse": "^7.0.2",
+    "drizzle-orm": "^0.45.2"
   }
 }
