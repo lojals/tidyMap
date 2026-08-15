@@ -1,15 +1,8 @@
-import Database, { type Database as DatabaseInstance } from 'better-sqlite3';
+import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema.js';
 
-/**
- * `BetterSQLite3Database<typeof schema>` (drizzle's query-builder class) does
- * not itself declare `$client`. The `drizzle()` factory below actually
- * returns `BetterSQLite3Database<TSchema> & { $client: Database }` — see
- * node_modules/drizzle-orm/better-sqlite3/driver.d.ts — so `Db` mirrors that
- * intersection to keep `$client` visible to callers such as `migrate()`.
- */
-export type Db = BetterSQLite3Database<typeof schema> & { $client: DatabaseInstance };
+export type Db = BetterSQLite3Database<typeof schema>;
 
 export function createDb(url: string): Db {
   const sqlite = new Database(url);
@@ -60,7 +53,11 @@ export function migrate(db: Db): void {
      )`,
   ];
 
+  // db.run() accepts a raw SQL string and is what drizzle's own migrators use.
+  // Do NOT reach for db.$client — it exists only on the intersection type
+  // drizzle() returns, so using it would force widening the exported Db type
+  // and leak the raw driver handle to every consumer.
   for (const statement of statements) {
-    db.$client.exec(statement);
+    db.run(statement);
   }
 }
