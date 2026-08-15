@@ -44,6 +44,22 @@ describe('initiateArchive', () => {
     const fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 500 }));
     await expect(initiateArchive('tok', { fetch: fetch as never })).rejects.toThrow(/500/);
   });
+
+  it('does not assert a spent consent it cannot distinguish from rate limiting', async () => {
+    // A fresh Response per call: initiateArchive's 403 branch consumes the
+    // body via .text(), and a Response body can only be read once. Reusing
+    // one Response instance across both calls below (e.g. via
+    // mockResolvedValue) throws "Body is unusable: Body has already been
+    // read" on the second call instead of exercising the code under test.
+    const fetch = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ error: { status: 'RESOURCE_EXHAUSTED' } }), { status: 403 }),
+    );
+    await expect(initiateArchive('tok', { fetch: fetch as never }))
+      .rejects.toThrow(/rate limiting/i);
+    // The destructive-action warning is the part that protects a valid token.
+    await expect(initiateArchive('tok', { fetch: fetch as never }))
+      .rejects.toThrow(/invalidates the current token/i);
+  });
 });
 
 describe('getArchiveState', () => {

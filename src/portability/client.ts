@@ -17,15 +17,24 @@ export interface PortabilityDeps {
 }
 
 /**
- * Raised when an already-spent one-time authorization is reused. The caller
- * must send the user through consent again after authorization:reset — a
- * reset alone is not enough, it invalidates the existing tokens.
+ * Raised on a 403 carrying RESOURCE_EXHAUSTED.
+ *
+ * That status is ambiguous: Google uses it both for a spent one-time
+ * authorization AND for ordinary quota/rate limiting. The remedies conflict —
+ * authorization:reset invalidates the current token, so "just reset it" is
+ * destructive when the real cause was a rate limit. The message therefore
+ * states both possibilities instead of asserting the likelier one.
  */
 export class ConsentAlreadyUsedError extends Error {
   constructor() {
     super(
-      'This Portability authorization has already been used. ' +
-      'Call POST /auth/reset, then re-authorize at GET /auth/google.',
+      'Google returned RESOURCE_EXHAUSTED. This usually means the one-time ' +
+      'Portability authorization has already been spent, but Google returns the ' +
+      'same status for quota and rate limiting. If you have not just run an ' +
+      'extraction, wait and retry before resetting — POST /auth/reset invalidates ' +
+      'the current token, which is destructive if it was still valid. If the ' +
+      'authorization really is spent: POST /auth/reset, then re-authorize at ' +
+      'GET /auth/google.',
     );
     this.name = 'ConsentAlreadyUsedError';
   }
