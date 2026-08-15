@@ -203,6 +203,37 @@ If an archive job itself fails, `GET /extractions/:jobId` reports
 `archiveJobs` response carries no free-text failure reason for `FAILED` or
 `CANCELLED` states, so there is nothing more specific to surface.
 
+### "Incremental auth is not allowed for the requested scopes"
+
+If `/auth/google` fails with `Error 400: invalid_request` and this message, the
+prior authorization is **still live on your Google account**. Per Google's
+[troubleshooting guide][tsg], the error fires when "the end user has already
+granted some scopes to the project, or the user has already granted some of the
+requested scopes." Data Portability refuses to re-grant scopes you already hold,
+and `prompt=consent` does not override it. (This app never sends
+`include_granted_scopes`, so that documented cause does not apply here.)
+
+The grant must be cleared before consent can succeed again. Two ways:
+
+**Google-side revoke — always works, no app state required:**
+
+1. Open <https://myaccount.google.com/permissions>
+2. Select this app, then **Remove access**
+3. Retry `/auth/google`
+
+**In-app** — `POST /auth/reset` with the `userId` whose tokens hold the grant,
+as above. This is the intended path, but it needs that user's stored tokens to
+still be usable.
+
+> **The trap.** Every consent mints a new `userId`, and `/auth/reset` needs the
+> tokens of the user that holds the *live* grant. If a run fails and you lose
+> track of which `userId` that was — or its tokens are already invalid — the app
+> cannot reset the authorization for you, and consent will keep failing with the
+> incremental-auth error. The Google-side revoke is the only guaranteed escape.
+> Note the `userId` the callback returns before starting an extraction.
+
+[tsg]: https://developers.google.com/data-portability/user-guide/troubleshooting
+
 ## Tests
 
 ```bash
