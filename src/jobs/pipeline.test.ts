@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { runExtraction } from './pipeline.js';
+import { loadFixtureExport } from './fixture-source.js';
 import { createDb, migrate, type Db } from '../db/client.js';
-import { users, extractions, places, oauthTokens } from '../db/schema.js';
+import { users, extractions, places, rawArtifacts, oauthTokens } from '../db/schema.js';
 import { loadConfig } from '../config.js';
 
 function ctxWith(source: 'live' | 'fixture', extraEnv: Record<string, string> = {}) {
@@ -120,6 +121,35 @@ describe('runExtraction in fixture mode', () => {
     }
   });
 
+  it('persists rawArtifacts durably even when a later stage fails, so a parse/enrich bug costs a re-parse, not a re-consent', async () => {
+    // parseExport cannot throw in the current implementation -- every parser
+    // call it makes is wrapped in its own try/catch (skippedFiles() records
+    // the failure per file instead of propagating). So this proves the
+    // durability property via the failure path that genuinely does throw
+    // inside runExtraction's try block: a Places 403 during enrich(), which
+    // happens well after the rawArtifacts inserts have already run and
+    // committed (better-sqlite3 autocommits each .run(); nothing here is
+    // wrapped in db.transaction()).
+    const ctx = ctxWith('fixture');
+    const fetch = vi.fn().mockResolvedValue(new Response('denied', { status: 403 }));
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('failed');
+
+    const fixtureFiles = loadFixtureExport();
+    const artifacts = ctx.db.select().from(rawArtifacts).where(eq(rawArtifacts.extractionId, 'e1')).all();
+    expect(artifacts.length).toBe(fixtureFiles.length);
+    for (const file of fixtureFiles) {
+      const stored = artifacts.find((a) => a.path === file.path);
+      expect(stored).toBeDefined();
+      // Byte-for-byte, not just present: a truncated or corrupted copy would
+      // defeat the whole point of paying for the download exactly once.
+      expect(stored!.content.toString('utf8')).toBe(file.content);
+    }
+  });
+
   it('never rejects, even when writing the failure status itself throws', async () => {
     const ctx = ctxWith('fixture');
     const fetch = vi.fn().mockResolvedValue(new Response('denied', { status: 403 }));
@@ -175,9 +205,14 @@ describe('runExtraction in live mode', () => {
     // A fake clock: sleep() advances it instead of the test actually
     // waiting, and now() reads from it, so the 15-minute-scale deadline
     // resolves in real time without the test taking any wall-clock time.
+    // Wrapped in vi.fn() (rather than a bare async function) so the actual
+    // ms arguments it was called with can be inspected below -- a fixed,
+    // non-growing interval would reach the same fake-clock deadline and
+    // leave the status/archiveJobId assertions alone, so those two checks
+    // cannot catch a regressed backoff on their own.
     let clock = 0;
     const fakeNow = () => clock;
-    const fastForward = async (ms: number) => { clock += ms; };
+    const fastForward = vi.fn(async (ms: number) => { clock += ms; });
 
     await runExtraction('e1', 'u1', ctx, {
       fetch: fetch as never,
@@ -189,5 +224,16 @@ describe('runExtraction in live mode', () => {
     const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
     expect(row.status).toBe('timed_out');
     expect(row.archiveJobId).toBe('job-1');
+
+    // Math.min(2 ** attempt * 2000, 30_000): 2000, 4000, 8000, 16000, then
+    // capped at 30000 for every attempt after. Pin both the growth and the
+    // cap, not just the final outcome, so a flattened or uncapped backoff
+    // fails here even though it would still time out at the same status.
+    const sleptMs = fastForward.mock.calls.map((call) => call[0]);
+    expect(sleptMs.slice(0, 4)).toEqual([2000, 4000, 8000, 16000]);
+    expect(Math.max(...sleptMs)).toBe(30_000);
+    for (let i = 1; i < sleptMs.length; i++) {
+      expect(sleptMs[i]).toBeGreaterThanOrEqual(sleptMs[i - 1]!);
+    }
   });
 });
