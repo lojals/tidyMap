@@ -665,7 +665,7 @@ git commit -m "feat: extract city and country from Places address components"
 
 **Interfaces:**
 - Consumes: `SavedItem`, `ExportFile` from `src/domain/types.js`
-- Produces: `parseSavedCollectionsCsv(csv: string, listName: string): SavedItem[]`; `parseStarredPlacesGeoJson(json: string): SavedItem[]`; `parseExport(files: ExportFile[], limit: number): SavedItem[]`
+- Produces: `parseSavedCollectionsCsv(csv: string, listName: string): SavedItem[]`; `parseStarredPlacesGeoJson(json: string): SavedItem[]`; `parseExport(files: ExportFile[], limit: number): SavedItem[]`; `skippedFiles(): ReadonlyMap<string, string>`; `resetSkippedFiles(): void`
 
 - [ ] **Step 1: Install the CSV parser**
 
@@ -676,13 +676,17 @@ npm install csv-parse
 - [ ] **Step 2: Write the saved-collections fixture**
 
 `fixtures/saved-collections/Want to go.csv`:
+Maps URLs contain commas in the `@lat,lng,zoom` segment, so the URL column
+MUST be quoted. Unquoted, csv-parse truncates the URL and spills the remainder
+into `tags` and `comment`, which silently corrupts the `note` fallback.
+
 ```csv
 title,note,item_content_url,tags,comment
-Satan's Coffee Corner,cortado,https://www.google.com/maps/place/Satan's+Coffee+Corner/@41.3825,2.1769,17z/,,
-Bar Cañete,tapas,https://www.google.com/maps/place/Bar+Ca%C3%B1ete/@41.3789,2.1723,17z/,,
+Satan's Coffee Corner,cortado,"https://www.google.com/maps/place/Satan's+Coffee+Corner/@41.3825,2.1769,17z/",,
+Bar Cañete,tapas,"https://www.google.com/maps/place/Bar+Ca%C3%B1ete/@41.3789,2.1723,17z/",,
 Nike Air Max,,https://www.google.com/shopping/product/12345,,
 Antarctica blog,,https://traveltriangle.com/blog/places-to-visit-in-antarctica/,,
-Park Güell,,https://www.google.com/maps/place/Park+G%C3%BCell/@41.4145,2.1527,17z/,,
+Park Güell,,"https://www.google.com/maps/place/Park+G%C3%BCell/@41.4145,2.1527,17z/",,
 ```
 
 - [ ] **Step 3: Write the failing CSV parser test**
@@ -981,7 +985,11 @@ describe('parseExport', () => {
   });
 
   it('ignores files that are neither .csv nor .json', () => {
-    expect(parseExport([{ path: 'Saved/photo.jpg', content: 'binary' }], 20)).toEqual([]);
+    // Content that WOULD yield an item if extension routing were removed.
+    // A bare 'binary' string parses to [] under the CSV parser anyway, so it
+    // could not distinguish "skipped by extension" from "empty by coincidence".
+    const csvLike = 'title,item_content_url\nDecoy,https://www.google.com/maps/place/Decoy/\n';
+    expect(parseExport([{ path: 'Saved/photo.jpg', content: csvLike }], 20)).toEqual([]);
   });
 });
 ```
@@ -1013,10 +1021,15 @@ export function parseExport(files: ExportFile[], limit: number): SavedItem[] {
     const ext = extname(file.path).toLowerCase();
     const listName = basename(file.path, extname(file.path));
 
-    if (ext === '.json') {
-      starred.push(...parseStarredPlacesGeoJson(file.content));
-    } else if (ext === '.csv') {
-      collections.push({ listName, items: parseSavedCollectionsCsv(file.content, listName) });
+    // One malformed file must not cost the user every other list.
+    try {
+      if (ext === '.json') {
+        starred.push(...parseStarredPlacesGeoJson(file.content));
+      } else if (ext === '.csv') {
+        collections.push({ listName, items: parseSavedCollectionsCsv(file.content, listName) });
+      }
+    } catch (error) {
+      skipped.set(file.path, error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -1024,6 +1037,43 @@ export function parseExport(files: ExportFile[], limit: number): SavedItem[] {
 
   return [...starred, ...collections.flatMap((c) => c.items)].slice(0, limit);
 }
+```
+
+Above `parseExport`, the skip registry — same pattern as `unmappedTypeCounts`
+in Task 1, so failures are recorded rather than swallowed without changing
+`parseExport`'s signature:
+
+```ts
+const skipped = new Map<string, string>();
+
+/** Files that threw during parsing, keyed by path, with the parser's message. */
+export function skippedFiles(): ReadonlyMap<string, string> {
+  return skipped;
+}
+
+export function resetSkippedFiles(): void {
+  skipped.clear();
+}
+```
+
+Add these tests to `src/parse/index.test.ts`:
+
+```ts
+  it('skips an unparseable file and still parses the rest', () => {
+    resetSkippedFiles();
+    const items = parseExport([
+      { path: 'Maps/Starred places.json', content: '{ not json at all' },
+      { path: 'Saved/A list.csv', content: csvA },
+    ], 20);
+    expect(items.map((i) => i.title)).toEqual(['A List Place']);
+  });
+
+  it('records the skipped file rather than swallowing the error', () => {
+    resetSkippedFiles();
+    parseExport([{ path: 'Maps/Starred places.json', content: '{ not json at all' }], 20);
+    expect([...skippedFiles().keys()]).toEqual(['Maps/Starred places.json']);
+    expect(skippedFiles().get('Maps/Starred places.json')).toBeTruthy();
+  });
 ```
 
 - [ ] **Step 15: Run the full suite and confirm it passes**

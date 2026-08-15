@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseExport } from './index.js';
+import { parseExport, skippedFiles, resetSkippedFiles } from './index.js';
 
 const starred = JSON.stringify({
   type: 'FeatureCollection',
@@ -38,5 +38,21 @@ describe('parseExport', () => {
     // could not distinguish "skipped by extension" from "empty by coincidence".
     const csvLike = 'title,item_content_url\nDecoy,https://www.google.com/maps/place/Decoy/\n';
     expect(parseExport([{ path: 'Saved/photo.jpg', content: csvLike }], 20)).toEqual([]);
+  });
+
+  it('skips an unparseable file and still parses the rest', () => {
+    resetSkippedFiles();
+    const items = parseExport([
+      { path: 'Maps/Starred places.json', content: '{ not json at all' },
+      { path: 'Saved/A list.csv', content: csvA },
+    ], 20);
+    expect(items.map((i) => i.title)).toEqual(['A List Place']);
+  });
+
+  it('records the skipped file rather than swallowing the error', () => {
+    resetSkippedFiles();
+    parseExport([{ path: 'Maps/Starred places.json', content: '{ not json at all' }], 20);
+    expect([...skippedFiles().keys()]).toEqual(['Maps/Starred places.json']);
+    expect(skippedFiles().get('Maps/Starred places.json')).toBeTruthy();
   });
 });
