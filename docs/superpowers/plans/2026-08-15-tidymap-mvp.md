@@ -48,14 +48,15 @@
 | `src/config.ts` | Env parsing, fail-fast validation |
 | `src/context.ts` | `AppContext` — the `{ db, config }` handle passed to routes and the pipeline |
 | `src/server.ts` | Fastify assembly + entrypoint |
-| `fixtures/` | Sample export + recorded Places responses |
+| `fixtures/` | Sample Portability export only. Recorded Places responses were specified but never built — fixture mode still calls the real Places API |
 
 ---
 
 ## Task 1: Scaffold, domain types, and categorization
 
 **Files:**
-- Create: `package.json`, `tsconfig.json`, `vitest.config.ts`, `.gitignore`, `.env.example`
+- Create: `package.json`, `tsconfig.json`, `.gitignore`, `.env.example`
+  (no `vitest.config.ts` — Vitest's default include glob already covers `src/**/*.test.ts`)
 - Create: `src/domain/types.ts`, `src/categorize/taxonomy.ts`
 - Test: `src/categorize/taxonomy.test.ts`
 
@@ -402,13 +403,24 @@ describe('group', () => {
     expect(result.results.map((g) => g['city'])).toEqual(['Barcelona', 'Lisbon']);
   });
 
-  it('orders groups by descending place count', () => {
+  it('orders by descending count even when that fights alphabetical order', () => {
+    // Porto must outrank Amsterdam on count alone, despite A < P. Using two
+    // cities whose count and alphabetical order agree would pass under a
+    // comparator that ignored count entirely.
     const result = group(
-      [place({ city: 'Lisbon' }), place({ city: 'Porto' }), place({ city: 'Lisbon' })],
+      [place({ city: 'Porto' }), place({ city: 'Amsterdam' }), place({ city: 'Porto' })],
       'city',
     );
-    expect(result.results[0]!['city']).toBe('Lisbon');
+    expect(result.results.map((g) => g['city'])).toEqual(['Porto', 'Amsterdam']);
     expect((result.results[0]!['places'] as ResolvedPlace[]).length).toBe(2);
+  });
+
+  it('groups by country using "country" as the key', () => {
+    const result = group(
+      [place({ country: 'Portugal' }), place({ country: null, resolved: false })],
+      'country',
+    );
+    expect(result.results.map((g) => g['country']).sort()).toEqual(['Portugal', 'Unknown']);
   });
 
   it('breaks count ties alphabetically by key', () => {
@@ -554,6 +566,16 @@ describe('extractCity', () => {
     ])).toBe('Shibuya City');
   });
 
+  it('never falls back to administrative_area_level_1', () => {
+    // Load-bearing. Every other fixture that carries administrative_area_level_1
+    // also carries locality, so appending it to CITY_TYPES would pass every
+    // other test in this file. This is the only case that would fail.
+    expect(extractCity([
+      c('Tokyo', 'Tokyo', 'administrative_area_level_1'),
+      c('Japan', 'JP', 'country'),
+    ])).toBeNull();
+  });
+
   it('returns null when no city-like component exists', () => {
     expect(extractCity([c('Spain', 'ES', 'country')])).toBeNull();
   });
@@ -643,7 +665,7 @@ git commit -m "feat: extract city and country from Places address components"
 
 **Interfaces:**
 - Consumes: `SavedItem`, `ExportFile` from `src/domain/types.js`
-- Produces: `parseSavedCollectionsCsv(csv: string, listName: string): SavedItem[]`; `parseStarredPlacesGeoJson(json: string): SavedItem[]`; `parseExport(files: ExportFile[], limit: number): SavedItem[]`
+- Produces: `parseSavedCollectionsCsv(csv: string, listName: string): SavedItem[]`; `parseStarredPlacesGeoJson(json: string): SavedItem[]`; `parseExport(files: ExportFile[], limit: number): SavedItem[]`; `skippedFiles(): ReadonlyMap<string, string>`; `resetSkippedFiles(): void`
 
 - [ ] **Step 1: Install the CSV parser**
 
@@ -654,13 +676,17 @@ npm install csv-parse
 - [ ] **Step 2: Write the saved-collections fixture**
 
 `fixtures/saved-collections/Want to go.csv`:
+Maps URLs contain commas in the `@lat,lng,zoom` segment, so the URL column
+MUST be quoted. Unquoted, csv-parse truncates the URL and spills the remainder
+into `tags` and `comment`, which silently corrupts the `note` fallback.
+
 ```csv
 title,note,item_content_url,tags,comment
-Satan's Coffee Corner,cortado,https://www.google.com/maps/place/Satan's+Coffee+Corner/@41.3825,2.1769,17z/,,
-Bar Cañete,tapas,https://www.google.com/maps/place/Bar+Ca%C3%B1ete/@41.3789,2.1723,17z/,,
+Satan's Coffee Corner,cortado,"https://www.google.com/maps/place/Satan's+Coffee+Corner/@41.3825,2.1769,17z/",,
+Bar Cañete,tapas,"https://www.google.com/maps/place/Bar+Ca%C3%B1ete/@41.3789,2.1723,17z/",,
 Nike Air Max,,https://www.google.com/shopping/product/12345,,
 Antarctica blog,,https://traveltriangle.com/blog/places-to-visit-in-antarctica/,,
-Park Güell,,https://www.google.com/maps/place/Park+G%C3%BCell/@41.4145,2.1527,17z/,,
+Park Güell,,"https://www.google.com/maps/place/Park+G%C3%BCell/@41.4145,2.1527,17z/",,
 ```
 
 - [ ] **Step 3: Write the failing CSV parser test**
@@ -959,7 +985,11 @@ describe('parseExport', () => {
   });
 
   it('ignores files that are neither .csv nor .json', () => {
-    expect(parseExport([{ path: 'Saved/photo.jpg', content: 'binary' }], 20)).toEqual([]);
+    // Content that WOULD yield an item if extension routing were removed.
+    // A bare 'binary' string parses to [] under the CSV parser anyway, so it
+    // could not distinguish "skipped by extension" from "empty by coincidence".
+    const csvLike = 'title,item_content_url\nDecoy,https://www.google.com/maps/place/Decoy/\n';
+    expect(parseExport([{ path: 'Saved/photo.jpg', content: csvLike }], 20)).toEqual([]);
   });
 });
 ```
@@ -991,10 +1021,15 @@ export function parseExport(files: ExportFile[], limit: number): SavedItem[] {
     const ext = extname(file.path).toLowerCase();
     const listName = basename(file.path, extname(file.path));
 
-    if (ext === '.json') {
-      starred.push(...parseStarredPlacesGeoJson(file.content));
-    } else if (ext === '.csv') {
-      collections.push({ listName, items: parseSavedCollectionsCsv(file.content, listName) });
+    // One malformed file must not cost the user every other list.
+    try {
+      if (ext === '.json') {
+        starred.push(...parseStarredPlacesGeoJson(file.content));
+      } else if (ext === '.csv') {
+        collections.push({ listName, items: parseSavedCollectionsCsv(file.content, listName) });
+      }
+    } catch (error) {
+      skipped.set(file.path, error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -1002,6 +1037,43 @@ export function parseExport(files: ExportFile[], limit: number): SavedItem[] {
 
   return [...starred, ...collections.flatMap((c) => c.items)].slice(0, limit);
 }
+```
+
+Above `parseExport`, the skip registry — same pattern as `unmappedTypeCounts`
+in Task 1, so failures are recorded rather than swallowed without changing
+`parseExport`'s signature:
+
+```ts
+const skipped = new Map<string, string>();
+
+/** Files that threw during parsing, keyed by path, with the parser's message. */
+export function skippedFiles(): ReadonlyMap<string, string> {
+  return skipped;
+}
+
+export function resetSkippedFiles(): void {
+  skipped.clear();
+}
+```
+
+Add these tests to `src/parse/index.test.ts`:
+
+```ts
+  it('skips an unparseable file and still parses the rest', () => {
+    resetSkippedFiles();
+    const items = parseExport([
+      { path: 'Maps/Starred places.json', content: '{ not json at all' },
+      { path: 'Saved/A list.csv', content: csvA },
+    ], 20);
+    expect(items.map((i) => i.title)).toEqual(['A List Place']);
+  });
+
+  it('records the skipped file rather than swallowing the error', () => {
+    resetSkippedFiles();
+    parseExport([{ path: 'Maps/Starred places.json', content: '{ not json at all' }], 20);
+    expect([...skippedFiles().keys()]).toEqual(['Maps/Starred places.json']);
+    expect(skippedFiles().get('Maps/Starred places.json')).toBeTruthy();
+  });
 ```
 
 - [ ] **Step 15: Run the full suite and confirm it passes**
@@ -1304,7 +1376,10 @@ describe('enrich', () => {
   });
 
   it('never deduplicates unresolved items together', async () => {
-    const fetch = vi.fn().mockResolvedValue(ok({}));
+    // mockImplementation, not mockResolvedValue: this test makes two real
+    // fetch calls (the titles differ, so the cache does not collapse them),
+    // and a single Response body cannot be read twice.
+    const fetch = vi.fn().mockImplementation(async () => ok({}));
     const places = await enrich([
       item({ sourceId: 'a', title: 'One' }), item({ sourceId: 'b', title: 'Two' }),
     ], { apiKey: 'K', fetch: fetch as never, sleep: noSleep });
@@ -1337,6 +1412,16 @@ import { searchText, type PlacesDeps, type PlaceSearchResult } from './places-cl
 
 function searchTextFor(item: SavedItem): string {
   return item.address ? `${item.title} ${item.address}` : item.title;
+}
+
+/**
+ * Keeps both annotations when the same place carries a different note in two
+ * lists. These are the user's own words — dropping one silently is data loss.
+ */
+function mergeNotes(existing: string | null, incoming: string | null): string | null {
+  if (!existing) return incoming;
+  if (!incoming || existing === incoming) return existing;
+  return `${existing} — ${incoming}`;
 }
 
 function toResolvedPlace(item: SavedItem, match: PlaceSearchResult | null): ResolvedPlace {
@@ -1419,7 +1504,7 @@ export async function enrich(items: SavedItem[], deps: PlacesDeps): Promise<Reso
       for (const list of place.sourceLists) {
         if (!existing.sourceLists.includes(list)) existing.sourceLists.push(list);
       }
-      existing.note ??= place.note;
+      existing.note = mergeNotes(existing.note, place.note);
     } else {
       byPlaceId.set(place.placeId, place);
     }
@@ -1446,7 +1531,7 @@ git commit -m "feat: resolve saved items to places via Places API with dedupe an
 ## Task 6: Database layer
 
 **Files:**
-- Create: `src/db/schema.ts`, `src/db/client.ts`, `drizzle.config.ts`
+- Create: `src/db/schema.ts`, `src/db/client.ts`
 - Test: `src/db/client.test.ts`
 
 **Interfaces:**
@@ -1457,8 +1542,12 @@ git commit -m "feat: resolve saved items to places via Places API with dedupe an
 
 ```bash
 npm install drizzle-orm better-sqlite3
-npm install -D drizzle-kit @types/better-sqlite3
+npm install -D @types/better-sqlite3
 ```
+
+drizzle-kit is deliberately not installed. Phase 1 has one schema version and
+no deployed database to migrate forward from, so `migrate()` below is idempotent
+DDL rather than generated migration files.
 
 - [ ] **Step 2: Write `src/db/schema.ts`**
 
@@ -1605,8 +1694,12 @@ export function migrate(db: Db): void {
      )`,
   ];
 
+  // db.run() accepts a raw SQL string and is what drizzle's own migrators use.
+  // Do NOT reach for db.$client — it exists only on the intersection type
+  // drizzle() returns, so using it would force widening the exported Db type
+  // and leak the raw driver handle to every consumer.
   for (const statement of statements) {
-    db.$client.exec(statement);
+    db.run(statement);
   }
 }
 ```
@@ -1741,15 +1834,24 @@ export interface PortabilityDeps {
 }
 
 /**
- * Raised when an already-spent one-time authorization is reused. The caller
- * must send the user through consent again after authorization:reset — a
- * reset alone is not enough, it invalidates the existing tokens.
+ * Raised on a 403 carrying RESOURCE_EXHAUSTED.
+ *
+ * That status is ambiguous: Google uses it both for a spent one-time
+ * authorization AND for ordinary quota/rate limiting. The remedies conflict —
+ * authorization:reset invalidates the current token, so "just reset it" is
+ * destructive when the real cause was a rate limit. The message therefore
+ * states both possibilities instead of asserting the likelier one.
  */
 export class ConsentAlreadyUsedError extends Error {
   constructor() {
     super(
-      'This Portability authorization has already been used. ' +
-      'Call POST /auth/reset, then re-authorize at GET /auth/google.',
+      'Google returned RESOURCE_EXHAUSTED. This usually means the one-time ' +
+      'Portability authorization has already been spent, but Google returns the ' +
+      'same status for quota and rate limiting. If you have not just run an ' +
+      'extraction, wait and retry before resetting — POST /auth/reset invalidates ' +
+      'the current token, which is destructive if it was still valid. If the ' +
+      'authorization really is spent: POST /auth/reset, then re-authorize at ' +
+      'GET /auth/google.',
     );
     this.name = 'ConsentAlreadyUsedError';
   }
@@ -1860,7 +1962,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
 import { downloadArchive } from './download.js';
 
-const bin = (bytes: Uint8Array) => new Response(bytes, { status: 200 });
+// Uint8Array<ArrayBuffer>, not bare Uint8Array: TS 5.9 made Uint8Array generic
+// over its buffer type, and DOM's BodyInit requires an ArrayBuffer-backed view.
+const bin = (bytes: Uint8Array<ArrayBuffer>) => new Response(bytes, { status: 200 });
 
 describe('downloadArchive', () => {
   it('unzips a zip response into its member files', async () => {
@@ -2002,8 +2106,24 @@ git commit -m "feat: download and unpack portability archives"
 - [ ] **Step 1: Install dependencies**
 
 ```bash
-npm install fastify google-auth-library zod dotenv
+npm install fastify zod dotenv
 ```
+
+> **Amendment — OAuth CSRF `state`.** The original plan omitted `state`, leaving
+> the callback willing to exchange any authorization code from any source
+> (RFC 9700 violation, authorization-code injection). Added:
+>
+> - `oauth_states` table — `state TEXT PRIMARY KEY`, `created_at INTEGER NOT NULL`
+>   — declared in **both** `src/db/schema.ts` and `migrate()`'s raw DDL, with a
+>   round-trip parity test like the other five tables.
+> - `createAuthState(db): string` minting `randomBytes(32).toString('base64url')`
+>   from `node:crypto`.
+> - `consumeAuthState(db, state): boolean` — single-use (the row is deleted on
+>   read **regardless of validity**, so a captured value cannot be replayed) and
+>   enforcing a 10-minute TTL.
+> - `buildAuthUrl(config, state)` — note the added parameter.
+> - Callback order: `error` → `state` → `code` → exchange. Each guard `return`s,
+>   so `exchangeCode` is unreachable on an unverified callback.
 
 - [ ] **Step 2: Write the failing config test**
 
@@ -2333,7 +2453,11 @@ export function persistTokens(db: Db, tokens: TokenSet): string {
     target: oauthTokens.userId,
     set: {
       accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
+      // Only overwrite the refresh token when Google actually sent one.
+      // Google omits refresh_token on most responses, and clobbering a good
+      // stored value with null would force a fresh consent on every later
+      // extraction — the precise cost the one-time authorization makes expensive.
+      ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
       expiresAt: tokens.expiresAt,
       scopes: tokens.scopes,
     },
@@ -2514,7 +2638,10 @@ function ctxWith(source: 'live' | 'fixture') {
   return { db, config };
 }
 
-const placesOk = new Response(JSON.stringify({
+// A factory, not a shared instance: the pipeline makes several Places calls and
+// a Response body can only be read once. `.mockResolvedValue(shared.clone())`
+// clones exactly once and then reuses the same object.
+const placesOk = () => new Response(JSON.stringify({
   places: [{
     id: 'ChIJfixture',
     displayName: { text: 'Fixture Cafe' },
@@ -2531,7 +2658,7 @@ const noSleep = async () => {};
 describe('runExtraction in fixture mode', () => {
   it('completes without calling the Portability API and stores places', async () => {
     const ctx = ctxWith('fixture');
-    const fetch = vi.fn().mockResolvedValue(placesOk.clone());
+    const fetch = vi.fn().mockImplementation(async () => placesOk());
 
     await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
 
@@ -2972,7 +3099,9 @@ export function buildServer(ctx: AppContext, deps: JobRouteDeps = {}): FastifyIn
   app.register(async (instance) => authRoutes(instance, ctx));
   app.register(async (instance) => jobRoutes(instance, ctx, deps));
 
-  app.setErrorHandler((error, _request, reply) => {
+  // The `: Error` annotation is required: Fastify 5's setErrorHandler defaults
+  // its TError generic to `unknown` (v4 defaulted to FastifyError).
+  app.setErrorHandler((error: Error, _request, reply) => {
     const status = error.name === 'ReauthRequiredError' ? 401
       : error.name === 'ConsentAlreadyUsedError' ? 409
       : 500;
@@ -2990,7 +3119,10 @@ async function main(): Promise<void> {
   // awaitPipeline defaults to false, so POST /extractions returns 202 at once.
   const app = buildServer({ db, config });
 
-  await app.listen({ port: config.port, host: '0.0.0.0' });
+  // Loopback only. /auth/reset is unauthenticated and destructive (it revokes
+  // the Portability grant), and userId is derived from the Google sub, so the
+  // listening socket is the only access control Phase 1 has.
+  await app.listen({ port: config.port, host: '127.0.0.1' });
   console.log(`TidyMap listening on http://localhost:${config.port}`);
   console.log(`Portability source: ${config.portabilitySource}`);
   console.log(`Start here: http://localhost:${config.port}/auth/google`);

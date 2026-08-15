@@ -1,0 +1,25 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [2.1769, 41.3825] },
+      "properties": {
+        "google_maps_url": "https://www.google.com/maps/place/?q=place_id:ChIJsatans",
+        "location": {
+          "name": "Satan's Coffee Corner",
+          "address": "Carrer de l'Arc de Sant Ramon del Call, 11, Barcelona",
+          "country_code": "ES"
+        }
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-9.1393, 38.7223] },
+      "properties": {
+        "name": "Time Out Market",
+        "address": "Av. 24 de Julho 49, Lisboa"
+      }
+    }
+  ]
+}
