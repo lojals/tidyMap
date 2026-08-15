@@ -1446,7 +1446,7 @@ git commit -m "feat: resolve saved items to places via Places API with dedupe an
 ## Task 6: Database layer
 
 **Files:**
-- Create: `src/db/schema.ts`, `src/db/client.ts`, `drizzle.config.ts`
+- Create: `src/db/schema.ts`, `src/db/client.ts`
 - Test: `src/db/client.test.ts`
 
 **Interfaces:**
@@ -1457,8 +1457,12 @@ git commit -m "feat: resolve saved items to places via Places API with dedupe an
 
 ```bash
 npm install drizzle-orm better-sqlite3
-npm install -D drizzle-kit @types/better-sqlite3
+npm install -D @types/better-sqlite3
 ```
+
+drizzle-kit is deliberately not installed. Phase 1 has one schema version and
+no deployed database to migrate forward from, so `migrate()` below is idempotent
+DDL rather than generated migration files.
 
 - [ ] **Step 2: Write `src/db/schema.ts`**
 
