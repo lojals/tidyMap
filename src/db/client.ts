@@ -37,6 +37,7 @@ export function migrate(db: Db): void {
        status TEXT NOT NULL,
        archive_job_id TEXT,
        error TEXT,
+       warnings TEXT,
        created_at INTEGER NOT NULL,
        updated_at INTEGER NOT NULL
      )`,

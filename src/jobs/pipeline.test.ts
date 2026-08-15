@@ -259,3 +259,110 @@ describe('runExtraction in live mode', () => {
     }
   });
 });
+
+describe('runExtraction warnings', () => {
+  // skippedFiles()/unmappedTypeCounts() are process-global registries that
+  // nothing outside tests read unless the pipeline surfaces them: before this
+  // fix, a corrupt export file was recorded there and then never seen by
+  // anyone -- the job still reported `complete` with the place from that file
+  // simply gone, with no signal. These prove the values actually reach
+  // extractions.warnings, not just the registries themselves (already
+  // covered by src/parse/index.test.ts and src/categorize/taxonomy.test.ts).
+
+  function archiveFetch(files: Record<string, string>) {
+    return vi.fn().mockImplementation(async (url: string | URL) => {
+      const href = String(url);
+      if (href.includes('portabilityArchive:initiate')) {
+        return new Response(JSON.stringify({ archiveJobId: 'job-1', accessType: 'ACCESS_TYPE_ONE_TIME' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (href.includes('portabilityArchiveState')) {
+        return new Response(JSON.stringify({
+          state: 'COMPLETE',
+          urls: Object.keys(files).map((name) => `https://signed/${name}`),
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      for (const [name, content] of Object.entries(files)) {
+        if (href === `https://signed/${name}`) return new Response(content, { status: 200 });
+      }
+      if (href.includes('places:searchText')) return placesOk.clone();
+      throw new Error(`unexpected fetch to ${href}`);
+    });
+  }
+
+  it('completes, persists places from the other files, and reports a skipped unparseable file in warnings', async () => {
+    const ctx = ctxWith('live', { EXTRACTION_LIMIT: '20' });
+    withStoredToken(ctx.db);
+
+    const fetch = archiveFetch({
+      'good.csv': 'title,item_content_url\nGood Place,https://www.google.com/maps/place/Good/\n',
+      'bad.json': '{ not json at all',
+    });
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('complete');
+    expect(row.warnings).toContain('bad.json');
+
+    const stored = ctx.db.select().from(places).where(eq(places.extractionId, 'e1')).all();
+    expect(stored.length).toBe(1);
+    expect((stored[0]!.payload as { name: string }).name).toBe('Fixture Cafe');
+  });
+
+  it('leaves warnings null when nothing was skipped or unmapped', async () => {
+    const ctx = ctxWith('live', { EXTRACTION_LIMIT: '20' });
+    withStoredToken(ctx.db);
+
+    const fetch = archiveFetch({
+      'good.csv': 'title,item_content_url\nGood Place,https://www.google.com/maps/place/Good/\n',
+    });
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('complete');
+    expect(row.warnings).toBeNull();
+  });
+
+  it('reports an unmapped primaryType in warnings', async () => {
+    const ctx = ctxWith('live', { EXTRACTION_LIMIT: '20' });
+    withStoredToken(ctx.db);
+
+    const fetch = vi.fn().mockImplementation(async (url: string | URL) => {
+      const href = String(url);
+      if (href.includes('portabilityArchive:initiate')) {
+        return new Response(JSON.stringify({ archiveJobId: 'job-1', accessType: 'ACCESS_TYPE_ONE_TIME' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (href.includes('portabilityArchiveState')) {
+        return new Response(JSON.stringify({
+          state: 'COMPLETE', urls: ['https://signed/good.csv'],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (href === 'https://signed/good.csv') {
+        return new Response('title,item_content_url\nGood Place,https://www.google.com/maps/place/Good/\n', { status: 200 });
+      }
+      if (href.includes('places:searchText')) {
+        return new Response(JSON.stringify({
+          places: [{
+            id: 'ChIJweird', displayName: { text: 'Weird Place' }, primaryType: 'flying_saucer_dealership',
+            addressComponents: [
+              { longText: 'Barcelona', shortText: 'Barcelona', types: ['locality'] },
+              { longText: 'Spain', shortText: 'ES', types: ['country'] },
+            ],
+          }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error(`unexpected fetch to ${href}`);
+    });
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('complete');
+    expect(row.warnings).toContain('flying_saucer_dealership');
+  });
+});

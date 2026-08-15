@@ -112,6 +112,14 @@ describe('extraction endpoints', () => {
     expect(early.json<{ status: string }>().status).toBe('running');
   });
 
+  it('reports warnings as null on GET /extractions/:jobId when nothing was skipped or unmapped', async () => {
+    const { app } = buildTestServer();
+    const { jobId } = (await startExtraction(app)).json<{ jobId: string }>();
+
+    const status = await app.inject({ method: 'GET', url: `/extractions/${jobId}` });
+    expect(status.json<{ warnings: string | null }>().warnings).toBeNull();
+  });
+
   it('returns 400 for an unknown userId', async () => {
     const { app } = buildTestServer();
     const response = await app.inject({

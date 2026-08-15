@@ -132,6 +132,32 @@ describe('createDb', () => {
     expect(found[0]!.payload).toEqual(payload);
   });
 
+  it('round-trips a warnings value on extractions, including null when there were none', () => {
+    // extractions.warnings is declared twice (schema.ts and migrate()'s raw
+    // DDL) like every other column here -- a mismatch between the two would
+    // still pass every other test in this file, since none of them touch it.
+    const db = createDb(':memory:');
+    migrate(db);
+
+    db.insert(users).values({
+      id: 'u5', googleSub: 'sub-5', email: 'e@f.com', createdAt: 1,
+    }).run();
+
+    db.insert(extractions).values({
+      id: 'e5', userId: 'u5', status: 'complete', createdAt: 1, updatedAt: 1,
+      warnings: 'Skipped 1 unparseable file(s): bad.json (Unexpected token)',
+    }).run();
+    db.insert(extractions).values({
+      id: 'e6', userId: 'u5', status: 'complete', createdAt: 1, updatedAt: 1,
+    }).run();
+
+    const withWarnings = db.select().from(extractions).where(eq(extractions.id, 'e5')).all();
+    expect(withWarnings[0]!.warnings).toBe('Skipped 1 unparseable file(s): bad.json (Unexpected token)');
+
+    const withoutWarnings = db.select().from(extractions).where(eq(extractions.id, 'e6')).all();
+    expect(withoutWarnings[0]!.warnings).toBeNull();
+  });
+
   it('round-trips an oauth_states row', () => {
     const db = createDb(':memory:');
     migrate(db);

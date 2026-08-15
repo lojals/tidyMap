@@ -22,6 +22,12 @@ export const extractions = sqliteTable('extractions', {
   status: text('status').notNull(),
   archiveJobId: text('archive_job_id'),
   error: text('error'),
+  /**
+   * Non-fatal issues recorded during parse/enrich: files that could not be
+   * parsed (per-file, never aborts the whole extraction) and Places
+   * primaryType values with no taxonomy mapping. Null when there were none.
+   */
+  warnings: text('warnings'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });

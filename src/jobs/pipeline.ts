@@ -5,7 +5,8 @@ import type { ExportFile } from '../domain/types.js';
 import { getValidAccessToken } from '../auth/oauth.js';
 import { downloadArchive } from '../archive/download.js';
 import { enrich } from '../enrich/index.js';
-import { parseExport } from '../parse/index.js';
+import { parseExport, skippedFiles, resetSkippedFiles } from '../parse/index.js';
+import { unmappedTypeCounts, resetUnmappedCounts } from '../categorize/taxonomy.js';
 import { getArchiveState, initiateArchive } from '../portability/client.js';
 import { extractions, places, rawArtifacts } from '../db/schema.js';
 import { loadFixtureExport } from './fixture-source.js';
@@ -26,6 +27,45 @@ function setStatus(ctx: AppContext, id: string, status: string, extra: Record<st
     .set({ status, updatedAt: Date.now(), ...extra })
     .where(eq(extractions.id, id))
     .run();
+}
+
+/**
+ * Logs and summarizes the non-fatal diagnostics recorded by the parse and
+ * enrich stages: files that could not be parsed (skippedFiles, a per-file
+ * failure that must not abort the whole extraction -- "never drop a place")
+ * and Places primaryType values with no taxonomy mapping (unmappedTypeCounts).
+ * Neither registry is read anywhere else in the running server, so without
+ * this call both are recorded into a module-global Map and then never seen
+ * by anyone -- the corrupt file or gap in the taxonomy table produces no
+ * signal at all even though the job reports `complete`.
+ *
+ * Returns null when there is nothing to report, so extractions.warnings
+ * stays null on the common case rather than an empty string.
+ */
+function summarizeWarnings(extractionId: string): string | null {
+  const skipped = skippedFiles();
+  for (const [path, message] of skipped) {
+    console.warn(`extraction ${extractionId}: skipped unparseable file "${path}": ${message}`);
+  }
+
+  const unmapped = unmappedTypeCounts();
+  for (const [primaryType, count] of unmapped) {
+    console.warn(
+      `extraction ${extractionId}: unmapped primaryType "${primaryType}" (${count}x), categorized as Unknown`,
+    );
+  }
+
+  const parts: string[] = [];
+  if (skipped.size > 0) {
+    const detail = [...skipped.entries()].map(([path, message]) => `${path} (${message})`).join('; ');
+    parts.push(`Skipped ${skipped.size} unparseable file(s): ${detail}`);
+  }
+  if (unmapped.size > 0) {
+    const detail = [...unmapped.entries()].map(([type, count]) => `${type} (${count}x)`).join(', ');
+    parts.push(`${unmapped.size} unmapped primaryType value(s) categorized as Unknown: ${detail}`);
+  }
+
+  return parts.length > 0 ? parts.join(' | ') : null;
 }
 
 /**
@@ -118,6 +158,12 @@ export async function runExtraction(
       }).run();
     }
 
+    // Process-global registries in a long-running server: reset before every
+    // run so one extraction's diagnostics never bleed into the next one's
+    // warnings summary.
+    resetSkippedFiles();
+    resetUnmappedCounts();
+
     const items = parseExport(files, ctx.config.extractionLimit);
 
     const resolved = await enrich(items, {
@@ -125,6 +171,8 @@ export async function runExtraction(
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
       ...(deps.sleep ? { sleep: deps.sleep } : {}),
     });
+
+    const warnings = summarizeWarnings(extractionId);
 
     for (const place of resolved) {
       ctx.db.insert(places).values({
@@ -134,7 +182,7 @@ export async function runExtraction(
       }).run();
     }
 
-    setStatus(ctx, extractionId, 'complete', { error: null });
+    setStatus(ctx, extractionId, 'complete', { error: null, warnings });
   } catch (error) {
     try {
       setStatus(ctx, extractionId, 'failed', {

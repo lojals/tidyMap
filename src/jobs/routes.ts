@@ -55,6 +55,7 @@ export async function jobRoutes(
       status: row.status,
       archiveJobId: row.archiveJobId,
       error: row.error,
+      warnings: row.warnings,
     });
   });
 
