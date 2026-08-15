@@ -2,14 +2,18 @@
   "name": "tidymap-mvp",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
   "directories": {
     "doc": "docs"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "scripts": {
     "test": "vitest run",
     "dev": "tsx watch src/server.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/server.js"
   },
   "keywords": [],
   "author": "",
