@@ -72,7 +72,12 @@ export async function exchangeCode(
   });
 
   if (!response.ok) {
-    throw new Error(`Token exchange failed with ${response.status}: ${await response.text()}`);
+    // Do not interpolate response.text() here: this error is uncaught at its
+    // only call site (the /auth/google/callback route), so its message
+    // reaches an unauthenticated caller's HTTP response verbatim. Google's
+    // raw upstream body carries no credentials, but echoing unfiltered
+    // upstream output back to the client isn't something to ship.
+    throw new Error(`Token exchange failed with status ${response.status}.`);
   }
 
   const json = (await response.json()) as {

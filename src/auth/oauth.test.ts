@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildAuthUrl, getValidAccessToken, persistTokens } from './oauth.js';
+import { buildAuthUrl, exchangeCode, getValidAccessToken, persistTokens } from './oauth.js';
 import { createDb, migrate } from '../db/client.js';
 import { users, oauthTokens } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -21,6 +21,24 @@ function seedDb(expiresAt: number, refreshToken: string | null) {
   return db;
 }
 
+/**
+ * Builds a fake (unsigned) ID token: header.payload.signature, where the
+ * payload is the base64url encoding of the given JSON claims. decodeIdToken
+ * only ever reads the payload segment, so the header/signature values are
+ * arbitrary placeholders — never a real Google-issued token.
+ */
+function fakeIdToken(payload: { sub: string; email: string }): string {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `header.${encoded}.signature`;
+}
+
+function tokenResponse(body: Record<string, unknown>): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
 describe('buildAuthUrl', () => {
   it('requests both portability scopes plus openid and email', () => {
     const url = new URL(buildAuthUrl(config));
@@ -35,6 +53,87 @@ describe('buildAuthUrl', () => {
     const url = new URL(buildAuthUrl(config));
     expect(url.searchParams.get('access_type')).toBe('offline');
     expect(url.searchParams.get('prompt')).toBe('consent');
+  });
+});
+
+describe('exchangeCode', () => {
+  it('posts the authorization_code grant to the token endpoint', async () => {
+    const fetch = vi.fn().mockResolvedValue(tokenResponse({
+      access_token: 'access-1',
+      expires_in: 3600,
+      scope: 'openid email',
+      id_token: fakeIdToken({ sub: 'sub-1', email: 'user@example.com' }),
+    }));
+
+    await exchangeCode('auth-code', config, { fetch: fetch as never });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe('https://oauth2.googleapis.com/token');
+    const body = Object.fromEntries(new URLSearchParams(init.body));
+    expect(body).toMatchObject({
+      grant_type: 'authorization_code',
+      code: 'auth-code',
+      redirect_uri: config.google.redirectUri,
+      client_id: config.google.clientId,
+      client_secret: config.google.clientSecret,
+    });
+  });
+
+  it('sets refreshToken to null when the response omits refresh_token', async () => {
+    const fetch = vi.fn().mockResolvedValue(tokenResponse({
+      access_token: 'access-1',
+      expires_in: 3600,
+      scope: 'openid email',
+      id_token: fakeIdToken({ sub: 'sub-1', email: 'user@example.com' }),
+    }));
+
+    const tokens = await exchangeCode('auth-code', config, { fetch: fetch as never });
+
+    expect(tokens.refreshToken).toBeNull();
+  });
+
+  it('computes expiresAt from expires_in', async () => {
+    const before = Date.now();
+    const fetch = vi.fn().mockResolvedValue(tokenResponse({
+      access_token: 'access-1',
+      expires_in: 3600,
+      scope: 'openid email',
+      id_token: fakeIdToken({ sub: 'sub-1', email: 'user@example.com' }),
+    }));
+
+    const tokens = await exchangeCode('auth-code', config, { fetch: fetch as never });
+    const after = Date.now();
+
+    expect(tokens.expiresAt).toBeGreaterThanOrEqual(before + 3600 * 1000);
+    expect(tokens.expiresAt).toBeLessThanOrEqual(after + 3600 * 1000);
+  });
+
+  it('derives googleSub and email from the decoded id_token payload', async () => {
+    const fetch = vi.fn().mockResolvedValue(tokenResponse({
+      access_token: 'access-1',
+      refresh_token: 'refresh-1',
+      expires_in: 3600,
+      scope: 'openid email',
+      id_token: fakeIdToken({ sub: 'sub-42', email: 'someone@example.com' }),
+    }));
+
+    const tokens = await exchangeCode('auth-code', config, { fetch: fetch as never });
+
+    expect(tokens.googleSub).toBe('sub-42');
+    expect(tokens.email).toBe('someone@example.com');
+    expect(tokens.accessToken).toBe('access-1');
+    expect(tokens.refreshToken).toBe('refresh-1');
+    expect(tokens.scopes).toBe('openid email');
+  });
+
+  it('throws with the status but without the response body when the exchange fails', async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response('client_secret leaked here', { status: 400 }),
+    );
+
+    await expect(exchangeCode('auth-code', config, { fetch: fetch as never }))
+      .rejects.toThrow('Token exchange failed with status 400.');
   });
 });
 
@@ -61,6 +160,10 @@ describe('getValidAccessToken', () => {
 
     expect(token).toBe('refreshed-in-time');
     expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe('https://oauth2.googleapis.com/token');
+    const body = Object.fromEntries(new URLSearchParams(init.body));
+    expect(body).toMatchObject({ grant_type: 'refresh_token', refresh_token: 'refresh' });
   });
 
   it('refreshes an expired token and persists the new one', async () => {
@@ -75,6 +178,11 @@ describe('getValidAccessToken', () => {
     expect(token).toBe('new-token');
     const stored = db.select().from(oauthTokens).where(eq(oauthTokens.userId, 'u1')).all();
     expect(stored[0]!.accessToken).toBe('new-token');
+
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe('https://oauth2.googleapis.com/token');
+    const body = Object.fromEntries(new URLSearchParams(init.body));
+    expect(body).toMatchObject({ grant_type: 'refresh_token', refresh_token: 'refresh' });
   });
 
   it('throws a re-auth error when the token is expired and no refresh token exists', async () => {
@@ -92,6 +200,44 @@ describe('getValidAccessToken', () => {
 });
 
 describe('persistTokens', () => {
+  it('creates a new user on first auth with an id derived from googleSub', () => {
+    const db = createDb(':memory:');
+    migrate(db);
+
+    const userId = persistTokens(db, {
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+      expiresAt: Date.now() + 600_000,
+      scopes: '',
+      googleSub: 'sub-1',
+      email: 'new@example.com',
+    });
+
+    expect(userId).toBe('user_sub-1');
+    const rows = db.select().from(users).where(eq(users.id, 'user_sub-1')).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.email).toBe('new@example.com');
+    expect(rows[0]!.googleSub).toBe('sub-1');
+  });
+
+  it('does not insert a second user row when the same googleSub authorizes twice', () => {
+    const db = createDb(':memory:');
+    migrate(db);
+
+    const base = {
+      expiresAt: Date.now() + 600_000,
+      scopes: '',
+      googleSub: 'sub-1',
+      email: 'new@example.com',
+    };
+
+    persistTokens(db, { ...base, accessToken: 'access-1', refreshToken: 'refresh-1' });
+    persistTokens(db, { ...base, accessToken: 'access-2', refreshToken: 'refresh-2' });
+
+    const rows = db.select().from(users).all();
+    expect(rows).toHaveLength(1);
+  });
+
   it('replaces the stored refresh token when re-auth returns a new one', () => {
     const db = seedDb(Date.now() + 600_000, 'old-refresh');
 
