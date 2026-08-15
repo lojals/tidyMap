@@ -17,10 +17,22 @@ export function buildServer(ctx: AppContext, deps: JobRouteDeps = {}): FastifyIn
   app.register(async (instance) => jobRoutes(instance, ctx, deps));
 
   app.setErrorHandler((error: Error, _request, reply) => {
-    const status = error.name === 'ReauthRequiredError' ? 401
-      : error.name === 'ConsentAlreadyUsedError' ? 409
-      : 500;
-    return reply.code(status).send({ error: error.message });
+    // 401/409 are deliberate user-facing guidance (re-auth instructions, the
+    // spent-consent explanation) and are safe to echo verbatim. Anything
+    // unmapped falls to 500, where the real error is logged server-side but
+    // never sent to the client -- an unrecognized error could be anything,
+    // including a message that leaks internal state (a stack-trace-adjacent
+    // string, a raw upstream body, a file path), so the response body must
+    // stay a fixed, generic string.
+    if (error.name === 'ReauthRequiredError') {
+      return reply.code(401).send({ error: error.message });
+    }
+    if (error.name === 'ConsentAlreadyUsedError') {
+      return reply.code(409).send({ error: error.message });
+    }
+
+    console.error(error);
+    return reply.code(500).send({ error: 'Internal error.' });
   });
 
   return app;

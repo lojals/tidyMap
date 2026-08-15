@@ -116,6 +116,9 @@ describe('authRoutes', () => {
 
   it('returns 400 for an expired state', async () => {
     const { db } = buildApp();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
     const staleState = 'stale-state';
     db.insert(oauthStates).values({
       state: staleState,
@@ -129,6 +132,30 @@ describe('authRoutes', () => {
     });
 
     expect(response.statusCode).toBe(400);
+    // Without stubbing fetch above, a TTL regression that let this reach
+    // exchangeCode would issue a real outbound call to Google from CI,
+    // falsifying the README's "No test calls Google" -- pinned here rather
+    // than trusted.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400, not 500, when state is repeated in the query string', async () => {
+    // Fastify does not schema-validate this querystring, so ?state=a&state=b
+    // parses to a string[] at runtime. Before the typeof guard, that array
+    // reached a Drizzle eq() filter and better-sqlite3 threw "Too many
+    // parameter values were provided", surfacing as an unhandled 500.
+    const { db } = buildApp();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = await buildServer(db);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/google/callback?code=c&state=a&state=b',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('is single-use — replaying the same state returns 400 the second time', async () => {
@@ -178,6 +205,16 @@ describe('authRoutes', () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: 'Missing authorization code.' });
+  });
+
+  it('POST /auth/reset with no body returns 400 rather than throwing on request.body.userId', async () => {
+    const { db } = buildApp();
+    const app = await buildServer(db);
+
+    const response = await app.inject({ method: 'POST', url: '/auth/reset' });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'userId is required.' });
   });
 
   it('POST /auth/reset resets authorization using the access token for that user', async () => {

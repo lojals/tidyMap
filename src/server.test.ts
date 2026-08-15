@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildServer } from './server.js';
 import { createDb, migrate } from './db/client.js';
 import { users } from './db/schema.js';
@@ -61,13 +61,19 @@ describe('buildServer error handler', () => {
     expect(response.statusCode).toBe(409);
   });
 
-  it('maps an unrecognized error to 500', async () => {
+  it('maps an unrecognized error to 500 with a fixed message, not the original', async () => {
     const { app } = buildTestServer();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     app.get('/__test/boom', async () => {
-      throw new Error('boom');
+      throw new Error('boom: internal detail that must not reach the client');
     });
 
     const response = await app.inject({ method: 'GET', url: '/__test/boom' });
+
     expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: 'Internal error.' });
+    expect(response.body).not.toContain('internal detail');
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

@@ -19,10 +19,18 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
 
       if (error) return reply.code(400).send({ error: `Consent was denied: ${error}` });
 
+      // Fastify does not schema-validate this querystring, so a repeated
+      // ?state=a&state=b parses to a string[] at runtime despite the TS type
+      // above claiming `string | undefined`. Passing an array straight into
+      // a Drizzle `eq()` binds it as multiple SQL parameters and throws
+      // "Too many parameter values were provided" -- an unhandled 500, not a
+      // validation failure. Guarding the runtime type here turns that into
+      // an ordinary 400.
+      //
       // Verified before anything else touches the code: without this, the
       // callback would accept any code from any source with no correlation
       // to a request this server initiated (authorization-code injection).
-      if (!consumeAuthState(ctx.db, state)) {
+      if (typeof state !== 'string' || !consumeAuthState(ctx.db, state)) {
         return reply.code(400).send({ error: 'Missing or invalid state parameter.' });
       }
 
@@ -40,7 +48,10 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
   );
 
   app.post<{ Body: { userId: string } }>('/auth/reset', async (request, reply) => {
-    const accessToken = await getValidAccessToken(ctx.db, request.body.userId, ctx.config);
+    const { userId } = request.body ?? {};
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+
+    const accessToken = await getValidAccessToken(ctx.db, userId, ctx.config);
     await resetAuthorization(accessToken);
 
     return reply.send({
