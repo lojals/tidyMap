@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import Fastify from 'fastify';
 import { authRoutes } from './routes.js';
-import { buildAuthUrl } from './oauth.js';
+import { createAuthState } from './oauth.js';
 import { createDb, migrate } from '../db/client.js';
-import { users, oauthTokens } from '../db/schema.js';
+import { users, oauthTokens, oauthStates } from '../db/schema.js';
 import { loadConfig } from '../config.js';
 
 const config = loadConfig({
@@ -24,6 +24,27 @@ async function buildServer(db: ReturnType<typeof createDb>) {
   return app;
 }
 
+/**
+ * Builds a fake (unsigned) ID token: header.payload.signature, where the
+ * payload is the base64url encoding of the given JSON claims. decodeIdToken
+ * only ever reads the payload segment, so the header/signature values are
+ * arbitrary placeholders — never a real Google-issued token.
+ */
+function fakeIdToken(payload: { sub: string; email: string }): string {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `header.${encoded}.signature`;
+}
+
+function tokenResponse(): Response {
+  return new Response(JSON.stringify({
+    access_token: 'access-1',
+    refresh_token: 'refresh-1',
+    expires_in: 3600,
+    scope: 'openid email',
+    id_token: fakeIdToken({ sub: 'sub-1', email: 'user@example.com' }),
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+}
+
 afterEach(() => {
   // routes.ts calls exchangeCode/getValidAccessToken/resetAuthorization
   // without passing deps through, so they all fall back to globalThis.fetch.
@@ -34,17 +55,23 @@ afterEach(() => {
 });
 
 describe('authRoutes', () => {
-  it('GET /auth/google redirects to the Google auth URL', async () => {
+  it('GET /auth/google redirects with a state param, and a second call yields a different one', async () => {
     const { db } = buildApp();
     const app = await buildServer(db);
 
-    const response = await app.inject({ method: 'GET', url: '/auth/google' });
+    const first = await app.inject({ method: 'GET', url: '/auth/google' });
+    const second = await app.inject({ method: 'GET', url: '/auth/google' });
 
-    expect(response.statusCode).toBe(302);
-    expect(response.headers.location).toBe(buildAuthUrl(config));
+    expect(first.statusCode).toBe(302);
+    expect(second.statusCode).toBe(302);
+    const firstState = new URL(first.headers.location as string).searchParams.get('state');
+    const secondState = new URL(second.headers.location as string).searchParams.get('state');
+    expect(firstState).toBeTruthy();
+    expect(secondState).toBeTruthy();
+    expect(firstState).not.toBe(secondState);
   });
 
-  it('reports denied consent when error is present, even without a code', async () => {
+  it('reports denied consent when error is present, even without a code or state', async () => {
     const { db } = buildApp();
     const app = await buildServer(db);
 
@@ -57,11 +84,97 @@ describe('authRoutes', () => {
     expect(response.json()).toEqual({ error: 'Consent was denied: access_denied' });
   });
 
-  it('returns 400 for a missing code when there is no error either', async () => {
+  it('returns 400 and never calls fetch when state is missing', async () => {
     const { db } = buildApp();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = await buildServer(db);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/google/callback?code=auth-code',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for an unknown state', async () => {
+    const { db } = buildApp();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = await buildServer(db);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/google/callback?code=auth-code&state=never-issued',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for an expired state', async () => {
+    const { db } = buildApp();
+    const staleState = 'stale-state';
+    db.insert(oauthStates).values({
+      state: staleState,
+      createdAt: Date.now() - 11 * 60 * 1000, // older than the 10-minute TTL
+    }).run();
+
+    const app = await buildServer(db);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/auth/google/callback?code=auth-code&state=${staleState}`,
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('is single-use — replaying the same state returns 400 the second time', async () => {
+    const { db } = buildApp();
+    const state = createAuthState(db);
+
+    const fetchMock = vi.fn().mockResolvedValue(tokenResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = await buildServer(db);
+    const url = `/auth/google/callback?code=auth-code&state=${state}`;
+
+    const first = await app.inject({ method: 'GET', url });
+    const second = await app.inject({ method: 'GET', url });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(400);
+  });
+
+  it('proceeds to the exchange when the state is valid', async () => {
+    const { db } = buildApp();
+    const state = createAuthState(db);
+
+    const fetchMock = vi.fn().mockResolvedValue(tokenResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = await buildServer(db);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/auth/google/callback?code=auth-code&state=${state}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ email: 'user@example.com' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 400 for a missing code when the state is valid and there is no error', async () => {
+    const { db } = buildApp();
+    const state = createAuthState(db);
     const app = await buildServer(db);
 
-    const response = await app.inject({ method: 'GET', url: '/auth/google/callback' });
+    const response = await app.inject({
+      method: 'GET',
+      url: `/auth/google/callback?state=${state}`,
+    });
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: 'Missing authorization code.' });

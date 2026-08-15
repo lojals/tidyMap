@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createDb, migrate } from './client.js';
-import { users, extractions, oauthTokens, rawArtifacts, places } from './schema.js';
+import { users, extractions, oauthTokens, rawArtifacts, places, oauthStates } from './schema.js';
 import { eq } from 'drizzle-orm';
 import type { ResolvedPlace } from '../domain/types.js';
 
@@ -130,5 +130,16 @@ describe('createDb', () => {
     expect(found).toHaveLength(1);
     expect(typeof found[0]!.payload).toBe('object');
     expect(found[0]!.payload).toEqual(payload);
+  });
+
+  it('round-trips an oauth_states row', () => {
+    const db = createDb(':memory:');
+    migrate(db);
+
+    db.insert(oauthStates).values({ state: 'abc123', createdAt: 1 }).run();
+
+    const found = db.select().from(oauthStates).where(eq(oauthStates.state, 'abc123')).all();
+    expect(found).toHaveLength(1);
+    expect(found[0]).toEqual({ state: 'abc123', createdAt: 1 });
   });
 });

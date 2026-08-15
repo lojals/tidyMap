@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildAuthUrl, exchangeCode, getValidAccessToken, persistTokens } from './oauth.js';
+import {
+  buildAuthUrl, consumeAuthState, createAuthState, exchangeCode, getValidAccessToken,
+  persistTokens,
+} from './oauth.js';
 import { createDb, migrate } from '../db/client.js';
 import { users, oauthTokens } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -41,7 +44,7 @@ function tokenResponse(body: Record<string, unknown>): Response {
 
 describe('buildAuthUrl', () => {
   it('requests both portability scopes plus openid and email', () => {
-    const url = new URL(buildAuthUrl(config));
+    const url = new URL(buildAuthUrl(config, 'state-1'));
     const scopes = url.searchParams.get('scope')!.split(' ');
     expect(scopes).toContain('https://www.googleapis.com/auth/dataportability.saved.collections');
     expect(scopes).toContain('https://www.googleapis.com/auth/dataportability.maps.starred_places');
@@ -50,9 +53,33 @@ describe('buildAuthUrl', () => {
   });
 
   it('requests offline access and forces the consent prompt', () => {
-    const url = new URL(buildAuthUrl(config));
+    const url = new URL(buildAuthUrl(config, 'state-1'));
     expect(url.searchParams.get('access_type')).toBe('offline');
     expect(url.searchParams.get('prompt')).toBe('consent');
+  });
+
+  it('includes the given state so the callback can verify it', () => {
+    const url = new URL(buildAuthUrl(config, 'state-xyz'));
+    expect(url.searchParams.get('state')).toBe('state-xyz');
+  });
+});
+
+describe('createAuthState / consumeAuthState', () => {
+  it('creates distinct states across calls', () => {
+    const db = createDb(':memory:');
+    migrate(db);
+
+    const first = createAuthState(db);
+    const second = createAuthState(db);
+
+    expect(first).not.toBe(second);
+  });
+
+  it('consumeAuthState returns false for undefined', () => {
+    const db = createDb(':memory:');
+    migrate(db);
+
+    expect(consumeAuthState(db, undefined)).toBe(false);
   });
 });
 

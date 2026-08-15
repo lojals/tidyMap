@@ -1,7 +1,8 @@
+import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/client.js';
-import { oauthTokens, users } from '../db/schema.js';
+import { oauthStates, oauthTokens, users } from '../db/schema.js';
 import { PORTABILITY_SCOPES } from '../portability/client.js';
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -25,8 +26,13 @@ export class ReauthRequiredError extends Error {
  * required rather than optional here: Google only returns a refresh token on
  * a fresh consent, and Portability's one-time authorization means we come
  * back through consent regularly.
+ *
+ * `state` must be a value minted by `createAuthState` and is echoed back by
+ * Google on the callback; `consumeAuthState` verifies it before the callback
+ * does anything else, so the callback cannot be driven by a `code` from any
+ * source other than a redirect this server itself initiated.
  */
-export function buildAuthUrl(config: Config): string {
+export function buildAuthUrl(config: Config, state: string): string {
   const url = new URL(AUTH_ENDPOINT);
   url.searchParams.set('client_id', config.google.clientId);
   url.searchParams.set('redirect_uri', config.google.redirectUri);
@@ -34,7 +40,29 @@ export function buildAuthUrl(config: Config): string {
   url.searchParams.set('scope', SCOPES.join(' '));
   url.searchParams.set('access_type', 'offline');
   url.searchParams.set('prompt', 'consent');
+  url.searchParams.set('state', state);
   return url.toString();
+}
+
+/** Ten minutes. A consent round-trip that takes longer than this has been abandoned. */
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+export function createAuthState(db: Db): string {
+  const state = randomBytes(32).toString('base64url');
+  db.insert(oauthStates).values({ state, createdAt: Date.now() }).run();
+  return state;
+}
+
+/**
+ * Single-use: the state is deleted whether or not it was valid, so a captured
+ * value cannot be replayed. Returns false for unknown or expired states.
+ */
+export function consumeAuthState(db: Db, state: string | undefined): boolean {
+  if (!state) return false;
+  const rows = db.select().from(oauthStates).where(eq(oauthStates.state, state)).all();
+  db.delete(oauthStates).where(eq(oauthStates.state, state)).run();
+  const row = rows[0];
+  return !!row && Date.now() - row.createdAt < STATE_TTL_MS;
 }
 
 export interface TokenSet {

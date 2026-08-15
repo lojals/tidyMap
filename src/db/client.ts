@@ -51,6 +51,10 @@ export function migrate(db: Db): void {
        extraction_id TEXT NOT NULL REFERENCES extractions(id),
        payload TEXT NOT NULL
      )`,
+    `CREATE TABLE IF NOT EXISTS oauth_states (
+       state TEXT PRIMARY KEY,
+       created_at INTEGER NOT NULL
+     )`,
   ];
 
   // db.run() accepts a raw SQL string and is what drizzle's own migrators use.

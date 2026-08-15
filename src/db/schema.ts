@@ -39,3 +39,8 @@ export const places = sqliteTable('places', {
   /** The full ResolvedPlace, serialized. Phase 1 has no query-by-column need. */
   payload: text('payload', { mode: 'json' }).notNull(),
 });
+
+export const oauthStates = sqliteTable('oauth_states', {
+  state: text('state').primaryKey(),
+  createdAt: integer('created_at').notNull(),
+});
