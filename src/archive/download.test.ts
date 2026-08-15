@@ -67,9 +67,41 @@ describe('downloadArchive', () => {
     expect(files).toEqual([{ path: 'data.bin', content: strFromU8(bytes) }]);
   });
 
-  it('throws when a signed URL fails, naming both the status and the URL', async () => {
+  it('throws when a signed URL fails, naming the status and only the origin+path, not the query string', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response('gone', { status: 404 }));
     await expect(downloadArchive(['https://signed/foo'], { fetch: fetch as never }))
       .rejects.toThrow('Archive download failed with 404 for https://signed/foo');
+  });
+
+  it('does not leak the signed URL query string (Google Cloud Storage signature) into the thrown message', async () => {
+    // Signed Cloud Storage URLs carry X-Goog-Signature / X-Goog-Credential in
+    // the query string -- a bearer capability for the user's entire Maps
+    // export. This message is persisted into extractions.error and served by
+    // GET /extractions/:jobId, so the query string must never appear in it.
+    const signedUrl =
+      'https://storage.googleapis.com/bucket/export.zip' +
+      '?X-Goog-Algorithm=GOOG4-RSA-SHA256' +
+      '&X-Goog-Credential=svc%40project.iam.gserviceaccount.com%2F20260815%2Fauto%2Fstorage%2Fgoog4_request' +
+      '&X-Goog-Signature=deadbeefcafefeed0123456789abcdef';
+    const fetch = vi.fn().mockResolvedValue(new Response('gone', { status: 403 }));
+
+    let thrown: Error | undefined;
+    try {
+      await downloadArchive([signedUrl], { fetch: fetch as never });
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    expect(thrown).toBeDefined();
+    expect(thrown!.message).toContain('https://storage.googleapis.com/bucket/export.zip');
+    expect(thrown!.message).not.toContain('X-Goog-Signature');
+    expect(thrown!.message).not.toContain('X-Goog-Credential');
+    expect(thrown!.message).not.toContain('deadbeefcafefeed0123456789abcdef');
+  });
+
+  it('falls back to the raw URL when it cannot be parsed, rather than throwing a second error', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('gone', { status: 500 }));
+    await expect(downloadArchive(['not-a-valid-url'], { fetch: fetch as never }))
+      .rejects.toThrow('Archive download failed with 500 for not-a-valid-url');
   });
 });

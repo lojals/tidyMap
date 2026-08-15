@@ -9,6 +9,23 @@ function isZip(bytes: Uint8Array): boolean {
 }
 
 /**
+ * Strips query parameters from a URL for safe use in logs/errors. Signed
+ * Cloud Storage URLs carry X-Goog-Signature / X-Goog-Credential in the query
+ * string -- a bearer capability for the user's entire Maps export -- so only
+ * origin+pathname may ever be surfaced. Falls back to the raw string if the
+ * URL cannot be parsed, rather than throwing a second error while already
+ * handling one.
+ */
+function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.origin + parsed.pathname;
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Names a single (non-zip) file from its signed URL's path. Assumes Cloud
  * Storage object URLs always carry a real basename; if that assumption ever
  * fails, this falls back to the literal string 'export'. A file named
@@ -46,7 +63,11 @@ export async function downloadArchive(
   for (const url of urls) {
     const response = await doFetch(url);
     if (!response.ok) {
-      throw new Error(`Archive download failed with ${response.status} for ${url}`);
+      // This message propagates into extractions.error (persisted in SQLite)
+      // and is served by GET /extractions/:jobId, so the raw signed URL --
+      // whose query string carries the actual bearer capability -- must
+      // never appear in it. Only origin+pathname is safe to surface.
+      throw new Error(`Archive download failed with ${response.status} for ${redactUrl(url)}`);
     }
 
     const bytes = new Uint8Array(await response.arrayBuffer());
