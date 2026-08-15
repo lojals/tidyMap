@@ -78,6 +78,37 @@ describe('enrich', () => {
     expect(places).toHaveLength(2);
   });
 
+  it('names the offending item\'s title when a Places lookup fails mid-run', async () => {
+    // Distinct titles so each gets its own cache entry and its own fetch
+    // call: the first resolves fine, the second hits a fatal (401/403/400)
+    // response that searchText throws on. The item that actually failed
+    // must be identifiable from the error alone, without an API key or
+    // token appearing in it.
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(ok(cafe('ChIJ1')))
+      .mockResolvedValueOnce(new Response('denied', { status: 403 }));
+
+    await expect(enrich([
+      item({ sourceId: 'a', title: 'Good Place' }),
+      item({ sourceId: 'b', title: 'Bad Place' }),
+    ], { apiKey: 'super-secret-key', fetch: fetch as never, sleep: noSleep }))
+      .rejects.toThrow('place lookup failed for "Bad Place"');
+  });
+
+  it('does not leak the API key into an enrichment failure message', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('denied', { status: 403 }));
+    let caught: unknown;
+    try {
+      await enrich([item({ title: 'Ghost Bar' })], {
+        apiKey: 'super-secret-key', fetch: fetch as never, sleep: noSleep,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).not.toContain('super-secret-key');
+  });
+
   it('caches by query so a repeated search is fetched once', async () => {
     const fetch = vi.fn().mockResolvedValue(ok(cafe('ChIJ1')));
     await enrich([

@@ -74,18 +74,27 @@ export async function enrich(items: SavedItem[], deps: PlacesDeps): Promise<Reso
     const text = searchTextFor(item);
     const cacheKey = `${text.toLowerCase()}|${item.lat ?? ''}|${item.lng ?? ''}`;
 
-    let match: PlaceSearchResult | null;
-    if (cache.has(cacheKey)) {
-      match = cache.get(cacheKey) ?? null;
-    } else {
-      match = await searchText(
-        { text, ...(item.lat !== undefined ? { lat: item.lat } : {}), ...(item.lng !== undefined ? { lng: item.lng } : {}) },
-        deps,
-      );
-      cache.set(cacheKey, match);
-    }
+    let place: ResolvedPlace;
+    try {
+      let match: PlaceSearchResult | null;
+      if (cache.has(cacheKey)) {
+        match = cache.get(cacheKey) ?? null;
+      } else {
+        match = await searchText(
+          { text, ...(item.lat !== undefined ? { lat: item.lat } : {}), ...(item.lng !== undefined ? { lng: item.lng } : {}) },
+          deps,
+        );
+        cache.set(cacheKey, match);
+      }
 
-    const place = toResolvedPlace(item, match);
+      place = toResolvedPlace(item, match);
+    } catch (error) {
+      // Identify the offending item without leaking anything sensitive: the
+      // title is the user's own data (not a secret), while the API key and
+      // any token live in deps/searchText and never reach this message.
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`place lookup failed for "${item.title}": ${message}`);
+    }
 
     if (!place.placeId) {
       unresolved.push(place);

@@ -87,6 +87,49 @@ describe('runExtraction in fixture mode', () => {
     expect(row.error).toMatch(/403/);
   });
 
+  it('names the failing stage in the recorded error, so a live failure says where it happened', async () => {
+    // Before this fix, a thrown error's message alone (e.g. "Cannot read
+    // properties of undefined (reading 'includes')") gave no hint of which
+    // pipeline stage produced it -- this proves the stored error is prefixed
+    // with the stage name regardless of which underlying error occurred.
+    const ctx = ctxWith('fixture');
+    const fetch = vi.fn().mockResolvedValue(new Response('denied', { status: 403 }));
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('failed');
+    expect(row.error).toMatch(/^enrich: /);
+  });
+
+  it('names the archive stage in the recorded error when the archive job itself fails', async () => {
+    // A different stage than enrich, to prove the stage-naming is general
+    // (applies to whichever stage actually throws), not hardcoded to enrich.
+    const ctx = ctxWith('live', { EXTRACTION_LIMIT: '20' });
+    withStoredToken(ctx.db);
+
+    const fetch = vi.fn().mockImplementation(async (url: string | URL) => {
+      const href = String(url);
+      if (href.includes('portabilityArchive:initiate')) {
+        return new Response(JSON.stringify({ archiveJobId: 'job-1', accessType: 'ACCESS_TYPE_ONE_TIME' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (href.includes('portabilityArchiveState')) {
+        return new Response(JSON.stringify({ state: 'FAILED' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch to ${href}`);
+    });
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('failed');
+    expect(row.error).toBe('archive: Google reported the archive job as FAILED.');
+  });
+
   it('ends the job failed (not complete) when Places rejects the key with a 400', async () => {
     // Google returns 400 API_KEY_INVALID for a bad key, not 401/403. A unit
     // test on searchText alone would not catch a regression where the
