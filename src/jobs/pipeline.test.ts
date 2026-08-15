@@ -87,6 +87,28 @@ describe('runExtraction in fixture mode', () => {
     expect(row.error).toMatch(/403/);
   });
 
+  it('ends the job failed (not complete) when Places rejects the key with a 400', async () => {
+    // Google returns 400 API_KEY_INVALID for a bad key, not 401/403. A unit
+    // test on searchText alone would not catch a regression where the
+    // pipeline swallows that throw into a completed job with everything
+    // unresolved -- this proves the throw actually propagates all the way
+    // out of enrich() and runExtraction() to the extraction row.
+    const ctx = ctxWith('fixture');
+    const fetch = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: { code: 400, status: 'INVALID_ARGUMENT', reason: 'API_KEY_INVALID' } }),
+      { status: 400 },
+    ));
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('failed');
+    expect(row.error).toMatch(/GOOGLE_PLACES_API_KEY/);
+
+    const stored = ctx.db.select().from(places).where(eq(places.extractionId, 'e1')).all();
+    expect(stored).toHaveLength(0);
+  });
+
   it('applies the cap before enrichment, so Places is never called for items beyond it', async () => {
     // The fixture export carries 5 place-bearing items (2 starred + 3 from
     // the collection). A row-count assertion alone cannot tell "capped at 2,

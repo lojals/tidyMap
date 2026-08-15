@@ -98,4 +98,19 @@ describe('searchText', () => {
       { apiKey: 'KEY', fetch: fetch as never, sleep: noSleep })).rejects.toThrow(/403/);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+
+  it('does not retry a 400 with an invalid-key body, and names GOOGLE_PLACES_API_KEY in the message', async () => {
+    // Google returns 400 API_KEY_INVALID for a bad key, not 401/403. Before
+    // this fix, a 400 fell through the 401/403 throw AND the 429/5xx retry
+    // check, landing on `return null` -- silently marking every place
+    // unresolved instead of failing the whole extraction loudly.
+    const body = JSON.stringify({
+      error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT', reason: 'API_KEY_INVALID' },
+    });
+    const fetch = vi.fn().mockResolvedValue(new Response(body, { status: 400 }));
+
+    await expect(searchText({ text: 'x' },
+      { apiKey: 'KEY', fetch: fetch as never, sleep: noSleep })).rejects.toThrow(/GOOGLE_PLACES_API_KEY/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 });
