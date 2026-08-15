@@ -127,7 +127,8 @@ both. Deduplication happens after enrichment, keyed on resolved `placeId`, mergi
 City is extracted from `addressComponents` with a fallback chain: `locality` →
 `postal_town` → `administrative_area_level_2`. `locality` is absent in UK addresses and
 several other countries, so the chain is required, not defensive. Country takes both
-`long_name` and ISO `short_name`.
+`longText` (name) and `shortText` (ISO code) — note the Places API **(New)** field names,
+not the legacy `long_name` / `short_name`.
 
 Responses are cached by normalized query so re-runs never re-bill.
 
@@ -201,7 +202,8 @@ table surface from real data rather than speculation.
 | Places returns no match | Item kept with `resolved: false`. Not an error |
 | Places 429 / 5xx | Retry with backoff; on exhaustion that item is unresolved and the job still completes |
 | Expired refresh token | 401 with re-auth link |
-| Places billing not enabled | Fail fast at startup with a clear message, rather than 20 confusing 403s |
+| Places API key missing | Rejected at startup by config validation, naming the variable |
+| Places billing not enabled | The first 403 throws and aborts the extraction with an explicit billing message. Not retried — every later call would fail identically, so 20 confusing 403s are avoided without a paid startup probe |
 
 ## Fixture mode
 
@@ -231,12 +233,15 @@ The implementation plan must include a setup runbook:
    `.../auth/dataportability.maps.starred_places`.
 6. Create a Web OAuth client with the local callback URL.
 
-## Assumptions to verify in the first implementation step
+## Verified API details
 
-- The `resources` values passed to `portabilityArchive:initiate` are the scope suffixes
-  (`saved.collections`, `maps.starred_places`). The docs state a 1:1 correspondence with
-  OAuth scopes but do not spell the literals out; confirm against a live call before
-  building on it.
+- `portabilityArchive:initiate` takes `resources` as scope suffixes — the quickstart shows
+  `{"resources":["myactivity.search"]}`, so ours is
+  `{"resources":["saved.collections","maps.starred_places"]}`.
+- Poll `GET https://dataportability.googleapis.com/v1/archiveJobs/{jobId}/portabilityArchiveState`.
+- Reset via `POST https://dataportability.googleapis.com/v1/authorization:reset`, which
+  returns an empty body and invalidates previously issued tokens — so a reset requires a
+  fresh consent round-trip, not just a new `initiate`.
 
 ## Known risks
 
