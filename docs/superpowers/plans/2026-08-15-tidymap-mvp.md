@@ -2106,8 +2106,24 @@ git commit -m "feat: download and unpack portability archives"
 - [ ] **Step 1: Install dependencies**
 
 ```bash
-npm install fastify google-auth-library zod dotenv
+npm install fastify zod dotenv
 ```
+
+> **Amendment — OAuth CSRF `state`.** The original plan omitted `state`, leaving
+> the callback willing to exchange any authorization code from any source
+> (RFC 9700 violation, authorization-code injection). Added:
+>
+> - `oauth_states` table — `state TEXT PRIMARY KEY`, `created_at INTEGER NOT NULL`
+>   — declared in **both** `src/db/schema.ts` and `migrate()`'s raw DDL, with a
+>   round-trip parity test like the other five tables.
+> - `createAuthState(db): string` minting `randomBytes(32).toString('base64url')`
+>   from `node:crypto`.
+> - `consumeAuthState(db, state): boolean` — single-use (the row is deleted on
+>   read **regardless of validity**, so a captured value cannot be replayed) and
+>   enforcing a 10-minute TTL.
+> - `buildAuthUrl(config, state)` — note the added parameter.
+> - Callback order: `error` → `state` → `code` → exchange. Each guard `return`s,
+>   so `exchangeCode` is unreachable on an unverified callback.
 
 - [ ] **Step 2: Write the failing config test**
 
@@ -2437,7 +2453,11 @@ export function persistTokens(db: Db, tokens: TokenSet): string {
     target: oauthTokens.userId,
     set: {
       accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
+      // Only overwrite the refresh token when Google actually sent one.
+      // Google omits refresh_token on most responses, and clobbering a good
+      // stored value with null would force a fresh consent on every later
+      // extraction — the precise cost the one-time authorization makes expensive.
+      ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
       expiresAt: tokens.expiresAt,
       scopes: tokens.scopes,
     },
@@ -3094,7 +3114,10 @@ async function main(): Promise<void> {
   // awaitPipeline defaults to false, so POST /extractions returns 202 at once.
   const app = buildServer({ db, config });
 
-  await app.listen({ port: config.port, host: '0.0.0.0' });
+  // Loopback only. /auth/reset is unauthenticated and destructive (it revokes
+  // the Portability grant), and userId is derived from the Google sub, so the
+  // listening socket is the only access control Phase 1 has.
+  await app.listen({ port: config.port, host: '127.0.0.1' });
   console.log(`TidyMap listening on http://localhost:${config.port}`);
   console.log(`Portability source: ${config.portabilitySource}`);
   console.log(`Start here: http://localhost:${config.port}/auth/google`);
