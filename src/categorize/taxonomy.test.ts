@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { categorize, unmappedTypeCounts, resetUnmappedCounts } from './taxonomy.js';
+import { categorize, unmappedTypeCounts, resetUnmappedCounts, emojiForCategory } from './taxonomy.js';
+import type { Category } from '../domain/types.js';
 
 describe('categorize', () => {
   beforeEach(() => resetUnmappedCounts());
@@ -81,5 +82,18 @@ describe('categorize', () => {
     expect(categorize('cafe')).toBe('Food & Drink');
     expect(categorize('yak_rental')).toBe('Unknown');
     expect(categorize(null)).toBe('Unknown');
+  });
+});
+
+describe('emojiForCategory', () => {
+  it('returns a distinct emoji for every category', () => {
+    const categories: Category[] = [
+      'Food & Drink', 'Nightlife', 'Lodging', 'Shopping', 'Outdoors',
+      'Culture', 'Entertainment', 'Services', 'Transport', 'Unknown',
+    ];
+    const emojis = categories.map(emojiForCategory);
+    expect(emojis.every((e) => e.length > 0)).toBe(true);
+    // Distinct so a glance at the UI actually distinguishes groups.
+    expect(new Set(emojis).size).toBe(categories.length);
   });
 });

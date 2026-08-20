@@ -51,6 +51,7 @@ export interface ResolvedPlace {
 /** One group. The key is named after the dimension grouped by. */
 export type PlaceGroup = {
   [key: string]: string | ResolvedPlace[];
+  emoji: string;
   places: ResolvedPlace[];
 };
 

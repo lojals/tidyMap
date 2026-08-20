@@ -121,3 +121,25 @@ export function unmappedTypeCounts(): ReadonlyMap<string, number> {
 export function resetUnmappedCounts(): void {
   unmapped.clear();
 }
+
+/** Neutral marker for groups that are not a curated category. */
+export const FALLBACK_EMOJI = '📌';
+export const CITY_EMOJI = '🏙️';
+export const COUNTRY_EMOJI = '🌍';
+
+const CATEGORY_EMOJI: Record<Category, string> = {
+  'Food & Drink': '🍽️',
+  Nightlife: '🍸',
+  Lodging: '🛏️',
+  Shopping: '🛍️',
+  Outdoors: '🌳',
+  Culture: '🏛️',
+  Entertainment: '🎭',
+  Services: '🏥',
+  Transport: '🚉',
+  Unknown: '❓',
+};
+
+export function emojiForCategory(category: Category): string {
+  return CATEGORY_EMOJI[category];
+}
