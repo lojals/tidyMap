@@ -553,11 +553,27 @@ Add to `src/auth/routes.test.ts`:
     expect(response.headers.location).toBe('/');
 
     const setCookie = String(response.headers['set-cookie']);
-    expect(setCookie).toContain('tidymap_uid=');
     expect(setCookie).toContain('HttpOnly');
     // SameSite=Lax is what stops a cross-site POST to the unauthenticated,
     // destructive /auth/reset once a cookie carries identity.
+    //
+    // NOTE: this integration assertion alone is NOT sufficient. @fastify/cookie
+    // backfills `sameSite: 'lax'` via Object.assign when the caller omits it,
+    // so this passes even if our own options drop the attribute. A direct unit
+    // test on sessionCookieOptions() is what actually pins it -- see below.
     expect(setCookie).toContain('SameSite=Lax');
+
+    // The cookie must carry the userId persistTokens returned. A bare
+    // toContain('tidymap_uid=') passes for any value at all.
+    const stored = db.select().from(users).all();
+    expect(stored).toHaveLength(1);
+    expect(setCookie.split(';')[0]!.split('=')[1]).toBe(stored[0]!.id);
+  });
+
+  it('sessionCookieOptions sets sameSite itself, not relying on the library default', () => {
+    // @fastify/cookie would backfill 'lax', masking its absence from our code.
+    expect(sessionCookieOptions().sameSite).toBe('lax');
+    expect(sessionCookieOptions().httpOnly).toBe(true);
   });
 ```
 
