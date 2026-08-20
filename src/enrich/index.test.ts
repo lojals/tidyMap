@@ -110,6 +110,46 @@ describe('enrich', () => {
     expect((caught as Error).message).not.toContain('super-secret-key');
   });
 
+  it('calls onProgress once per item, with done increasing one-by-one up to total', async () => {
+    // Distinct titles so each item does its own fetch -- pins the exact
+    // ordered sequence of [done, total] pairs, not merely "the callback was
+    // called n times" or "it was called at all", so a callback that fires
+    // the wrong number of times, skips an item, or reports a constant count
+    // fails here.
+    const fetch = vi.fn().mockImplementation(async () => ok(cafe('ChIJprogress')));
+    const calls: Array<[number, number]> = [];
+
+    await enrich([
+      item({ sourceId: 'a', title: 'One' }),
+      item({ sourceId: 'b', title: 'Two' }),
+      item({ sourceId: 'c', title: 'Three' }),
+    ], {
+      apiKey: 'K', fetch: fetch as never, sleep: noSleep,
+      onProgress: (done, total) => calls.push([done, total]),
+    });
+
+    expect(calls).toEqual([[1, 3], [2, 3], [3, 3]]);
+  });
+
+  it('calls onProgress once per item even when a repeat query is served from cache', async () => {
+    // Two items with the same title collapse onto a single fetch call (see
+    // the caching test below) -- onProgress must still fire per input item,
+    // not per Places call, since that is what the caller is waiting on.
+    const fetch = vi.fn().mockResolvedValue(ok(cafe('ChIJcache')));
+    const calls: Array<[number, number]> = [];
+
+    await enrich([
+      item({ sourceId: 'a', title: 'Same Place' }),
+      item({ sourceId: 'b', title: 'Same Place' }),
+    ], {
+      apiKey: 'K', fetch: fetch as never, sleep: noSleep,
+      onProgress: (done, total) => calls.push([done, total]),
+    });
+
+    expect(calls).toEqual([[1, 2], [2, 2]]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('caches by query so a repeated search is fetched once', async () => {
     const fetch = vi.fn().mockResolvedValue(ok(cafe('ChIJ1')));
     await enrich([

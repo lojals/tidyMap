@@ -39,6 +39,17 @@ describe('createDb', () => {
     expect(columns.filter((c) => c.name === 'warnings')).toHaveLength(1);
   });
 
+  it('is idempotent — migrating three times does not throw and does not duplicate the stage/stage_detail columns', () => {
+    const db = createDb(':memory:');
+    migrate(db);
+    migrate(db);
+    migrate(db);
+
+    const columns = db.all<{ name: string }>(sql.raw('PRAGMA table_info(extractions)'));
+    expect(columns.filter((c) => c.name === 'stage')).toHaveLength(1);
+    expect(columns.filter((c) => c.name === 'stage_detail')).toHaveLength(1);
+  });
+
   it('is idempotent — migrating three times against a legacy database leaves users in the current shape exactly once', () => {
     // migrateUsersTableShape only rebuilds when it finds google_sub or email
     // still present. The 2nd and 3rd calls here must recognize the already-
@@ -397,6 +408,73 @@ describe('createDb', () => {
 
     const withoutWarnings = db.select().from(extractions).where(eq(extractions.id, 'e6')).all();
     expect(withoutWarnings[0]!.warnings).toBeNull();
+  });
+
+  it('round-trips stage and stage_detail on extractions, including null when the job is not mid-run', () => {
+    // stage/stage_detail are declared twice (schema.ts and migrate()'s raw
+    // DDL) like every other column here -- a mismatch between the two would
+    // still pass every other test in this file, since none of them touch it.
+    const db = createDb(':memory:');
+    migrate(db);
+
+    db.insert(users).values({
+      id: 'u8', createdAt: 1,
+    }).run();
+
+    db.insert(extractions).values({
+      id: 'e8', userId: 'u8', status: 'running', createdAt: 1, updatedAt: 1,
+      stage: 'resolving', stageDetail: '12 of 20',
+    }).run();
+    db.insert(extractions).values({
+      id: 'e9', userId: 'u8', status: 'pending', createdAt: 1, updatedAt: 1,
+    }).run();
+
+    const midRun = db.select().from(extractions).where(eq(extractions.id, 'e8')).all();
+    expect(midRun[0]!.stage).toBe('resolving');
+    expect(midRun[0]!.stageDetail).toBe('12 of 20');
+
+    const notStarted = db.select().from(extractions).where(eq(extractions.id, 'e9')).all();
+    expect(notStarted[0]!.stage).toBeNull();
+    expect(notStarted[0]!.stageDetail).toBeNull();
+  });
+
+  // Regression test for the same class of bug the warnings-column test above
+  // guards against: CREATE TABLE IF NOT EXISTS is a no-op against a database
+  // that already has the extractions table, so a column added later never
+  // reaches a database created before it existed unless addColumnIfMissing
+  // is called for it too.
+  it('adds the stage and stage_detail columns to a database created before they existed', () => {
+    const db = createDb(':memory:');
+
+    db.run(`CREATE TABLE users (
+       id TEXT PRIMARY KEY,
+       created_at INTEGER NOT NULL
+     )`);
+    db.run(`CREATE TABLE extractions (
+       id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id),
+       status TEXT NOT NULL,
+       archive_job_id TEXT,
+       error TEXT,
+       warnings TEXT,
+       created_at INTEGER NOT NULL,
+       updated_at INTEGER NOT NULL
+     )`);
+
+    migrate(db);
+
+    db.insert(users).values({
+      id: 'u9', createdAt: 1,
+    }).run();
+    db.insert(extractions).values({
+      id: 'e10', userId: 'u9', status: 'running', createdAt: 1, updatedAt: 1,
+      stage: 'organizing', stageDetail: null,
+    }).run();
+
+    const found = db.select().from(extractions).where(eq(extractions.id, 'e10')).all();
+    expect(found).toHaveLength(1);
+    expect(found[0]!.stage).toBe('organizing');
+    expect(found[0]!.stageDetail).toBeNull();
   });
 
   it('round-trips an oauth_states row', () => {

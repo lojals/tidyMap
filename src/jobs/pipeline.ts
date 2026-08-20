@@ -22,9 +22,38 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 const POLL_TIMEOUT_MS = 15 * 60 * 1000;
 const POLL_CAP_MS = 30_000;
 
+const TERMINAL_STATUSES = new Set(['complete', 'failed', 'timed_out']);
+
 function setStatus(ctx: AppContext, id: string, status: string, extra: Record<string, unknown> = {}) {
+  // A terminal status always clears stage/stageDetail here, centrally,
+  // rather than relying on every call site to remember to do it: the UI
+  // reads `status` once a job is done, and a stage left over from whichever
+  // stage the job happened to be in when it finished would be stale and
+  // misleading (e.g. a failed row still reporting "resolving").
+  const stageReset = TERMINAL_STATUSES.has(status) ? { stage: null, stageDetail: null } : {};
   ctx.db.update(extractions)
-    .set({ status, updatedAt: Date.now(), ...extra })
+    .set({ status, updatedAt: Date.now(), ...stageReset, ...extra })
+    .where(eq(extractions.id, id))
+    .run();
+}
+
+/**
+ * Records the pipeline stage a running extraction has just entered. Always
+ * clears stageDetail on a stage change -- only `resolving` has a detail
+ * (see setResolvingProgress below), so any detail from a previous stage
+ * must not linger into the next one.
+ */
+function setStage(ctx: AppContext, id: string, stage: string): void {
+  ctx.db.update(extractions)
+    .set({ stage, stageDetail: null, updatedAt: Date.now() })
+    .where(eq(extractions.id, id))
+    .run();
+}
+
+/** Per-place progress during the `resolving` stage, e.g. "12 of 20". */
+function setResolvingProgress(ctx: AppContext, id: string, done: number, total: number): void {
+  ctx.db.update(extractions)
+    .set({ stageDetail: `${done} of ${total}`, updatedAt: Date.now() })
     .where(eq(extractions.id, id))
     .run();
 }
@@ -146,6 +175,7 @@ async function fetchExportFiles(
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
   });
 
+  setStage(ctx, extractionId, 'requesting');
   const { archiveJobId } = await initiateArchive(accessToken, {
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
   });
@@ -154,9 +184,11 @@ async function fetchExportFiles(
     .where(eq(extractions.id, extractionId))
     .run();
 
+  setStage(ctx, extractionId, 'preparing');
   const urls = await waitForArchive(accessToken, archiveJobId, deps);
   if (urls === 'timed_out') return 'timed_out';
 
+  setStage(ctx, extractionId, 'downloading');
   return downloadArchive(urls, { ...(deps.fetch ? { fetch: deps.fetch } : {}) });
 }
 
@@ -202,14 +234,18 @@ export async function runExtraction(
       }).run();
     }
 
+    setStage(ctx, extractionId, 'reading');
     const items = await withStage('parse', async () => parseExport(files, ctx.config.extractionLimit));
 
+    setStage(ctx, extractionId, 'resolving');
     const resolved = await withStage('enrich', () => enrich(items, {
       apiKey: ctx.config.placesApiKey,
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
       ...(deps.sleep ? { sleep: deps.sleep } : {}),
+      onProgress: (done, total) => setResolvingProgress(ctx, extractionId, done, total),
     }));
 
+    setStage(ctx, extractionId, 'organizing');
     const warnings = summarizeWarnings(extractionId);
 
     for (const place of resolved) {

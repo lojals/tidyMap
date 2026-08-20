@@ -121,6 +121,35 @@ describe('extraction endpoints', () => {
     expect(status.json<{ warnings: string | null }>().warnings).toBeNull();
   });
 
+  it('reports stage and stageDetail as null on GET /extractions/:jobId once the extraction completes', async () => {
+    const { app } = buildTestServer();
+    const { jobId } = (await startExtraction(app)).json<{ jobId: string }>();
+
+    const status = await app.inject({ method: 'GET', url: `/extractions/${jobId}` });
+    const body = status.json<{ status: string; stage: string | null; stageDetail: string | null }>();
+    expect(body.status).toBe('complete');
+    expect(body.stage).toBeNull();
+    expect(body.stageDetail).toBeNull();
+  });
+
+  it('reports the current stage and stageDetail on GET /extractions/:jobId for a job mid-run', async () => {
+    const { app, db } = buildTestServer();
+    const { jobId } = (await startExtraction(app)).json<{ jobId: string }>();
+
+    // startExtraction runs the whole pipeline synchronously (awaitPipeline),
+    // so it always ends up complete by the time this test can inspect it --
+    // this simulates the row shape a still-running job would have, the same
+    // way the 409-before-complete test above simulates 'running' by writing
+    // the row directly rather than pausing the real pipeline mid-flight.
+    db.update(extractions).set({ stage: 'resolving', stageDetail: '3 of 5' })
+      .where(eq(extractions.id, jobId)).run();
+
+    const status = await app.inject({ method: 'GET', url: `/extractions/${jobId}` });
+    const body = status.json<{ stage: string | null; stageDetail: string | null }>();
+    expect(body.stage).toBe('resolving');
+    expect(body.stageDetail).toBe('3 of 5');
+  });
+
   it('returns 400 for an unknown userId', async () => {
     const { app } = buildTestServer();
     const response = await app.inject({

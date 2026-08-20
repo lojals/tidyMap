@@ -32,6 +32,15 @@ export const extractions = sqliteTable('extractions', {
    * primaryType values with no taxonomy mapping. Null when there were none.
    */
   warnings: text('warnings'),
+  /**
+   * Current pipeline stage: requesting | preparing | downloading | reading |
+   * resolving | organizing. Null once the job reaches a terminal status
+   * (complete | failed | timed_out) -- the UI reads `status` for those, and
+   * a stale stage would be misleading.
+   */
+  stage: text('stage'),
+  /** Free-text detail for stages that have one, e.g. '12 of 20' during resolving. */
+  stageDetail: text('stage_detail'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
