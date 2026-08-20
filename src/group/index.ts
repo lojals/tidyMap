@@ -1,12 +1,11 @@
 import {
-  emojiForCategory, FALLBACK_EMOJI, CITY_EMOJI, COUNTRY_EMOJI,
+  emojiForCategory, FALLBACK_EMOJI, CITY_EMOJI, COUNTRY_EMOJI, CATEGORIES,
 } from '../categorize/taxonomy.js';
 import type { Category, GroupBy, GroupedResult, PlaceGroup, ResolvedPlace } from '../domain/types.js';
 
-const CURATED: ReadonlySet<string> = new Set<Category>([
-  'Food & Drink', 'Nightlife', 'Lodging', 'Shopping', 'Outdoors',
-  'Culture', 'Entertainment', 'Services', 'Transport', 'Unknown',
-]);
+// Derived from taxonomy's CATEGORIES rather than listed again here, so this
+// set can't drift out of sync with the emoji table it mirrors.
+const CURATED: ReadonlySet<string> = new Set<Category>(CATEGORIES);
 
 /** `yak_rental` -> `Yak Rental`. */
 function readableType(type: string): string {
@@ -22,9 +21,10 @@ function keyFor(place: ResolvedPlace, groupBy: GroupBy): string {
     case 'category':
       // A place Google typed but our table does not cover becomes its own
       // group rather than joining one useless Unknown pile. Places with no
-      // type at all have nothing better to say and stay Unknown.
+      // type at all -- or whose type has no readable words once stripped of
+      // separators -- have nothing better to say and stay Unknown.
       if (place.category !== 'Unknown') return place.category;
-      return place.primaryType ? readableType(place.primaryType) : 'Unknown';
+      return (place.primaryType && readableType(place.primaryType)) || 'Unknown';
     case 'city': return place.city ?? 'Unknown';
     case 'country': return place.country ?? 'Unknown';
   }

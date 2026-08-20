@@ -15,6 +15,7 @@ const TYPE_TO_CATEGORY: Record<string, Category> = {
   casino: 'Nightlife',
   comedy_club: 'Nightlife',
 
+  lodging: 'Lodging',
   hotel: 'Lodging',
   hostel: 'Lodging',
   guest_house: 'Lodging',
@@ -143,3 +144,10 @@ const CATEGORY_EMOJI: Record<Category, string> = {
 export function emojiForCategory(category: Category): string {
   return CATEGORY_EMOJI[category];
 }
+
+/**
+ * Every curated category, derived from `CATEGORY_EMOJI` rather than listed a
+ * second time -- a hand-maintained duplicate is one of the two ways to add an
+ * eleventh category and forget to update the other list.
+ */
+export const CATEGORIES: readonly Category[] = Object.keys(CATEGORY_EMOJI) as Category[];

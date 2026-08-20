@@ -128,4 +128,38 @@ describe('group', () => {
     expect(group([place({ city: 'Lisbon' })], 'city').results[0]!['emoji']).toBe('🏙️');
     expect(group([place({ country: 'Spain' })], 'country').results[0]!['emoji']).toBe('🌍');
   });
+
+  it('falls back to Unknown when a primaryType has no readable words', () => {
+    // readableType('___') strips to an empty string -- a nameless group is
+    // worse than folding it into Unknown, which at least has a label and the
+    // correct (not fallback) emoji.
+    const result = group(
+      [place({ category: 'Unknown', primaryType: '___' })],
+      'category',
+    );
+    expect(result.results[0]!['category']).toBe('Unknown');
+    expect(result.results[0]!['emoji']).toBe('❓');
+  });
+
+  it('merges a fallback key that collides with a curated category name', () => {
+    // Deliberate: an unmapped type whose readable form exactly matches a
+    // curated category name resolves to the same Map key as that category,
+    // so the two buckets merge into one. This is intentional -- see keyFor's
+    // comment. Two groups both labeled "Nightlife" would be worse for the
+    // user than one merged group, and unmappedTypeCounts() still flags
+    // 'nightlife' as a taxonomy gap, so the warning stays actionable while
+    // the UI does the sensible thing. 'nightlife' itself is deliberately NOT
+    // in TYPE_TO_CATEGORY (only its subtypes -- night_club, pub, casino,
+    // comedy_club -- are), so this exercises the fallback path.
+    const result = group([
+      place({ category: 'Nightlife', primaryType: 'pub' }),
+      place({ category: 'Unknown', primaryType: 'nightlife' }),
+    ], 'category');
+
+    const nightlifeGroups = result.results.filter((g) => g['category'] === 'Nightlife');
+    expect(nightlifeGroups).toHaveLength(1);
+    expect((nightlifeGroups[0]!['places'] as ResolvedPlace[]).length).toBe(2);
+    // Merged group keeps the curated emoji, not the fallback marker.
+    expect(nightlifeGroups[0]!['emoji']).toBe('🍸');
+  });
 });

@@ -11,6 +11,7 @@ describe('categorize', () => {
     ['bakery', 'Food & Drink'],
     ['night_club', 'Nightlife'],
     ['hotel', 'Lodging'],
+    ['lodging', 'Lodging'],
     ['book_store', 'Shopping'],
     ['park', 'Outdoors'],
     ['museum', 'Culture'],
