@@ -1,1 +1,56 @@
-ok
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TidyMap</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><h1>TidyMap</h1></header>
+
+  <main>
+    <section id="view-signed-out" hidden>
+      <p>Organize your saved Google Maps places by category, city, or country.</p>
+      <a class="button" href="/auth/google">Connect Google</a>
+    </section>
+
+    <section id="view-ready" hidden>
+      <p>Ready to extract your saved places.</p>
+      <p class="note">
+        This takes a few minutes and spends a one-time Google authorization.
+        Running it again later requires clearing the grant first.
+      </p>
+      <button class="button" id="start">Extract my saved places</button>
+    </section>
+
+    <section id="view-running" hidden>
+      <p>Google is building your archive. <span id="elapsed"></span></p>
+      <p class="note" id="running-status"></p>
+    </section>
+
+    <section id="view-done" hidden>
+      <div class="controls">
+        <span>Group by</span>
+        <button class="tab" data-group="category">Category</button>
+        <button class="tab" data-group="city">City</button>
+        <button class="tab" data-group="country">Country</button>
+      </div>
+      <p class="note" id="summary"></p>
+      <div class="warnings" id="warnings" hidden>
+        <button class="dismiss" id="dismiss-warnings" aria-label="Dismiss">&times;</button>
+        <span id="warnings-text"></span>
+      </div>
+      <div id="groups"></div>
+    </section>
+
+    <section id="view-failed" hidden>
+      <h2>That run failed</h2>
+      <pre id="failure"></pre>
+      <div id="failure-help"></div>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
