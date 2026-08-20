@@ -90,17 +90,42 @@ Confirmed, with real output:
    `202` with a `jobId`.
 4. `GET /extractions/:jobId/results?groupBy=category` — every group carried
    an `emoji` (`Food & Drink` → 🍽️, `Outdoors` → 🌳).
-5. **Not exercised.** All 4 fixture places (Satan's Coffee Corner, Time Out
-   Market, Bar Cañete, Park Güell) resolved cleanly to a known category —
-   `unresolvedCount: 0`, no `Unknown` bucket, `warnings: null`. The committed
+5. **Not exercised, but for a different reason than first recorded here** —
+   corrected below after review caught the original explanation was wrong.
+   All 4 fixture places (Satan's Coffee Corner, Time Out Market, Bar Cañete,
+   Park Güell) resolved cleanly to a known category — `unresolvedCount: 0`,
+   no `Unknown` bucket, `warnings: null`. So the specific behavior point 5
+   checks for — an uncategorized place grouping under a readable type
+   instead of `Unknown` — genuinely never fired, because no place ended up
+   uncategorized. That part was right.
+
+   What was wrong: the original text here claimed this was because "the
    fixture set happens not to contain a place whose `primaryType` falls
-   outside the taxonomy table, so the "uncategorized place groups under a
-   readable type, not `Unknown`" behavior was not exercised live. It is
-   covered by unit tests (`src/group/index.test.ts`, e.g. "groups an
-   uncategorized place under its readable primaryType"), which is a real
-   safety net but not the same as seeing it happen against live data. Worth
-   redoing point 5 the next time a live or fixture run turns up a genuinely
-   unmapped type.
+   outside the taxonomy table." That's false. Time Out Market's
+   `primaryType` is `food_court`, which is **absent** from
+   `TYPE_TO_CATEGORY` in `src/categorize/taxonomy.ts` and doesn't match the
+   `_restaurant` suffix rule either — the direct lookup genuinely fails for
+   it. It landed in Food & Drink anyway because of the Task 1 secondary-type
+   rescue in `categorize()`: Time Out Market's `types` array was
+   `["food_court", "bar", "restaurant", "food", "point_of_interest",
+   "establishment"]`, and the rescue loop's first mapped hit, `bar`, sent it
+   to Food & Drink before it ever reached the `Unknown` fallback. **That is
+   the `types[]` rescue mechanism firing for the first time against live
+   Google data** — previously verified only in unit tests
+   (`src/categorize/taxonomy.test.ts`) — and this document should have
+   credited it instead of asserting a taxonomy gap that isn't there. Point
+   5's own readable-type-fallback path is still genuinely unexercised; worth
+   redoing the next time a live or fixture run turns up a `primaryType`
+   with *no* mappable secondary type either.
+
+One more thing worth recording precisely because it can't be faked: the
+fixture's "Satan's Coffee Corner" resolved to Google's real current listing
+name for that address, **"Right Side Coffee Bar"** — an actual business
+rename this run picked up live. A replayed or mocked Places response would
+echo the name it was given; only a genuine `places:searchText` call against
+Google's live index would return a name that doesn't match the input at
+all. Of everything in this verification, that single detail is the hardest
+to dismiss as a fixture artifact.
 
 `npx vitest run` (228/228) and `npx tsc --noEmit` were also re-run clean
 after this verification.
@@ -123,6 +148,12 @@ always hold in this environment.
 - **Wrong-city matches.** Saved-collection items carry no coordinates, so their
   Places lookups have no `locationBias`. A generically-named place can resolve to
   the wrong city entirely. Check `city` values against what you actually saved.
+- **Phase 2 data point on that risk — not a resolution.** In Task 7's fixture-mode
+  verification, two of the four resolved places (Bar Cañete, Park Güell) came only
+  from the saved-collections CSV and so had exactly the no-`locationBias` condition
+  above; both landed correctly in Barcelona. n=2, drawn from a hand-picked fixture
+  set, not a real user's saved places — far too small a sample to retire the risk
+  described above, but the first evidence in either direction. The caution stands.
 - **Taxonomy gaps.** The category table was written from documentation, never
   against real data. Unmapped `primaryType` values are counted and surface in the
   `warnings` field of `GET /extractions/:jobId`. That is your gap list.
