@@ -67,9 +67,13 @@ async function main(): Promise<void> {
   // than a predictable scheme would be, but it is not a substitute for the
   // loopback binding.
   await app.listen({ port: config.port, host: '127.0.0.1' });
-  console.log(`TidyMap listening on http://localhost:${config.port}`);
+  // 127.0.0.1, not localhost: the server binds the IPv4 loopback address
+  // only, and on some machines "localhost" resolves to the IPv6 loopback
+  // first, where nothing is listening -- requests silently hang or misbehave
+  // instead of connecting. Printing the actual bind address avoids that trap.
+  console.log(`TidyMap listening on http://127.0.0.1:${config.port}`);
   console.log(`Portability source: ${config.portabilitySource}`);
-  console.log(`Start here: http://localhost:${config.port}/auth/google`);
+  console.log(`Start here: http://127.0.0.1:${config.port}/auth/google`);
 }
 
 if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js')) {

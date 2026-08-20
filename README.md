@@ -34,7 +34,7 @@ has no build step to forget.
 ## Using the web UI
 
 `npm run dev` (or `npm start` against a fresh build) serves the whole app —
-API and UI — on one port. Open <http://localhost:3000/> and click **Connect
+API and UI — on one port. Open <http://127.0.0.1:3000/> and click **Connect
 Google**. That sends you through the same `/auth/google` consent flow the
 curl walkthrough below uses; the callback now sets an HttpOnly session
 cookie and redirects you straight back to `/` instead of showing you
@@ -59,6 +59,30 @@ and prefers the session cookie only when both are present
 (`identityFrom` in `src/auth/identity.ts`). Since the cookie is `HttpOnly`,
 scripting against these endpoints with curl still means capturing a
 `userId` by hand — see the note in the end-to-end checklist below.
+
+## Categorization
+
+Every place is mapped to one of ten curated categories (`src/categorize/taxonomy.ts`)
+from its Places `primaryType` first. If `primaryType` has no entry in the
+table, Phase 2 added a rescue: the first mappable entry in the place's
+`types[]` array is used instead — Google often reports a useless primary
+type alongside a perfectly good secondary one (`yak_rental, tourist_attraction`
+resolves to Culture, not Unknown). Only a place that finds no mapping in
+either `primaryType` or `types[]` is counted as a taxonomy gap; see the
+"Which `primaryType` values are taxonomy gaps" note below for how to find
+those.
+
+**Sub-category fallback grouping.** When grouping results by category
+(`GET /extractions/:jobId/results?groupBy=category`, `src/group/index.ts`),
+a place that ended up Unknown gets a second chance at a useful label: if it
+has a `primaryType`, that type is turned into a readable group name of its
+own (`yak_rental` → "Yak Rental") instead of joining one undifferentiated
+`Unknown` pile. This applies per distinct `primaryType`, so different
+unmapped types land in different groups rather than merging. Only a place
+with no `primaryType` at all — nothing to build a readable name from —
+still lands in the literal `Unknown` group. Fallback groups carry a neutral
+📌 marker instead of a category emoji, so they read as distinct from the
+ten curated categories at a glance.
 
 ## Security posture (Phase 1)
 
@@ -137,7 +161,7 @@ API itself, and *has* been run against a real `GOOGLE_PLACES_API_KEY` — see
 "How far the live run actually got" in [docs/HANDOFF.md](docs/HANDOFF.md)
 for what that did and did not cover.
 
-- [ ] 1. Open http://localhost:3000/auth/google and grant consent. As of
+- [ ] 1. Open http://127.0.0.1:3000/auth/google and grant consent. As of
       Task 3, the callback no longer returns your `userId` in the response —
       it sets an HttpOnly `tidymap_uid` session cookie and redirects you to
       `/`. If you're driving the UI, that's the whole step: the browser
@@ -151,7 +175,7 @@ for what that did and did not cover.
 - [ ] 2. Start an extraction:
 
       ```bash
-      curl -X POST http://localhost:3000/extractions \
+      curl -X POST http://127.0.0.1:3000/extractions \
         -H 'content-type: application/json' \
         -d '{"userId":"YOUR_USER_ID"}'
       ```
@@ -164,15 +188,15 @@ for what that did and did not cover.
 - [ ] 3. Poll until `status` is `complete` — the archive typically takes a few minutes:
 
       ```bash
-      curl http://localhost:3000/extractions/JOB_ID
+      curl http://127.0.0.1:3000/extractions/JOB_ID
       ```
 
 - [ ] 4. Fetch the results:
 
       ```bash
-      curl 'http://localhost:3000/extractions/JOB_ID/results?groupBy=category'
-      curl 'http://localhost:3000/extractions/JOB_ID/results?groupBy=city'
-      curl 'http://localhost:3000/extractions/JOB_ID/results?groupBy=country'
+      curl 'http://127.0.0.1:3000/extractions/JOB_ID/results?groupBy=category'
+      curl 'http://127.0.0.1:3000/extractions/JOB_ID/results?groupBy=city'
+      curl 'http://127.0.0.1:3000/extractions/JOB_ID/results?groupBy=country'
       ```
 
 While running this, record the following — they are real gaps/behaviors this
@@ -187,12 +211,19 @@ in the commit or PR that records the live run:
   `unresolvedCount` in any of the three results responses (both fields are
   present regardless of `groupBy`). An item with `"resolved": false` still
   appears in the output; it is never silently dropped.
-- **Which `primaryType` values landed in `Unknown`** — group by `category`,
-  look at the `Unknown` bucket, and read each place's `primaryType` field.
-  Each one is a gap in the taxonomy table (`src/categorize/taxonomy.ts`)
-  worth filling. `GET /extractions/JOB_ID` also reports these directly, in
-  its nullable `warnings` field, alongside any export file that could not be
-  parsed — no need to hunt through the grouped results by hand.
+- **Which `primaryType` values are taxonomy gaps** — do **not** find these by
+  grouping on `category` and reading the `Unknown` bucket; Phase 2 made that
+  bucket the wrong place to look. An unmapped `primaryType` with a rescuable
+  secondary type resolves to a real category (the `types[]` rescue — see
+  "Categorization" above), and an unmapped `primaryType` with *no* rescuable
+  secondary type now gets its own readable-type group instead of landing in
+  `Unknown` ("Sub-category fallback grouping", also above). Only a place
+  with no `primaryType` at all still reaches
+  the literal `Unknown` bucket. Read `GET /extractions/JOB_ID`'s nullable
+  `warnings` field instead — it reports every `primaryType` that reached
+  neither a direct match nor a secondary-type rescue (alongside any export
+  file that could not be parsed), which is the actual gap list. Each name in
+  there is worth adding to the taxonomy table (`src/categorize/taxonomy.ts`).
 - **Whether saved-collection items without coordinates resolved to the right
   city** — saved-collection rows carry no lat/lng (only starred places do;
   see `src/parse/saved-collections.ts` vs `src/parse/starred-places.ts`), so
@@ -223,7 +254,7 @@ behavior.)
 To reset:
 
 ```bash
-curl -X POST http://localhost:3000/auth/reset \
+curl -X POST http://127.0.0.1:3000/auth/reset \
   -H 'content-type: application/json' \
   -d '{"userId":"YOUR_USER_ID"}'
 ```

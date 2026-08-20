@@ -250,6 +250,14 @@ plain `http` on loopback only). Do not weaken `sameSite` or add `secure`
 without also moving off plain `http`, and do not add a cross-origin CORS
 policy that would let another origin ride the cookie.
 
+One precision worth keeping in mind: `SameSite=Lax` is same-*site*, not
+same-*origin*. A page served from another port of `127.0.0.1` (or another
+subdomain of the same registrable domain) is still same-site, so its cookie
+rides an ordinary cross-port POST unaffected by this control. The control is
+still doing real work -- it blocks the actual cross-*site* case this app
+cares about -- but "another origin" above should be read as "another site,"
+not "any other port or process on this machine."
+
 ## Where the detail lives
 
 - Spec (Phase 1): [docs/superpowers/specs/2026-08-15-tidymap-mvp-design.md](superpowers/specs/2026-08-15-tidymap-mvp-design.md) — amended throughout the build; describes intended final state.
