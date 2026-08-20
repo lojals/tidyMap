@@ -24,6 +24,31 @@ function ctxWith(source: 'live' | 'fixture', extraEnv: Record<string, string> = 
   return { db, config };
 }
 
+/**
+ * Intercepts every db.update(extractions).set(...) call and records only the
+ * values relevant to stage tracking (`stage` and/or `stageDetail`), in the
+ * exact order they were written -- so a test can assert the real sequence of
+ * writes a run produced, not just the final row (which a terminal write
+ * overwrites down to `null`/`complete` and so cannot show the path taken to
+ * get there).
+ */
+function captureExtractionWrites(db: Db): Array<Record<string, unknown>> {
+  const captured: Array<Record<string, unknown>> = [];
+  const originalUpdate = db.update.bind(db);
+  db.update = ((...args: Parameters<typeof originalUpdate>) => {
+    const builder = originalUpdate(...args);
+    const originalSet = builder.set.bind(builder);
+    builder.set = ((values: Record<string, unknown>) => {
+      if ('stage' in values || 'stageDetail' in values) {
+        captured.push(values);
+      }
+      return originalSet(values);
+    }) as typeof builder.set;
+    return builder;
+  }) as typeof db.update;
+  return captured;
+}
+
 /** Stores a valid, non-expiring access token so getValidAccessToken need not refresh. */
 function withStoredToken(db: Db): void {
   db.insert(oauthTokens).values({
@@ -85,6 +110,55 @@ describe('runExtraction in fixture mode', () => {
     const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
     expect(row.status).toBe('failed');
     expect(row.error).toMatch(/403/);
+  });
+
+  it('sets the stage through exactly reading, resolving, organizing on the fixture path (which has no archive step), then clears it on completion', async () => {
+    // Fixture mode skips requesting/preparing/downloading entirely -- there
+    // is no Portability archive to request, poll for, or download. This
+    // pins the exact sequence (order and values, not just "not null" at
+    // some point) so a stage that is never advanced, or one that is set to
+    // the same value throughout, both fail this assertion.
+    const ctx = ctxWith('fixture');
+    const fetch = vi.fn().mockImplementation(async () => placesOk.clone());
+    const writes = captureExtractionWrites(ctx.db);
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const stages = writes.filter((w) => 'stage' in w).map((w) => w.stage);
+    expect(stages).toEqual(['reading', 'resolving', 'organizing', null]);
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('complete');
+    expect(row.stage).toBeNull();
+    expect(row.stageDetail).toBeNull();
+  });
+
+  it('clears the stage when the job ends failed, not just when it completes', async () => {
+    const ctx = ctxWith('fixture');
+    const fetch = vi.fn().mockResolvedValue(new Response('denied', { status: 403 }));
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('failed');
+    expect(row.stage).toBeNull();
+    expect(row.stageDetail).toBeNull();
+  });
+
+  it('reports resolving progress with done increasing one-by-one up to total, distinct from the stage transitions', async () => {
+    // Not merely "the callback fired": pins the exact ordered sequence of
+    // "N of 3" values so a callback that fires the wrong number of times, or
+    // reports a constant/non-increasing count, fails here.
+    const ctx = ctxWith('fixture', { EXTRACTION_LIMIT: '3' });
+    const fetch = vi.fn().mockImplementation(async () => placesOk.clone());
+    const writes = captureExtractionWrites(ctx.db);
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const progress = writes
+      .filter((w) => 'stageDetail' in w && !('stage' in w))
+      .map((w) => w.stageDetail);
+    expect(progress).toEqual(['1 of 3', '2 of 3', '3 of 3']);
   });
 
   it('names the failing stage in the recorded error, so a live failure says where it happened', async () => {
@@ -220,20 +294,25 @@ describe('runExtraction in fixture mode', () => {
     const fetch = vi.fn().mockResolvedValue(new Response('denied', { status: 403 }));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    // Break the DB write the catch block relies on to record the failure,
-    // simulating e.g. a closed connection or a disk-full error at the exact
-    // moment the pipeline tries to report that something else went wrong.
-    // The 1st update() call is the initial "running" status write (which
-    // must succeed so the scenario is realistic); the 2nd is the catch
-    // block's "failed" write, which this makes throw.
-    let updateCallCount = 0;
+    // Break exactly the DB write the catch block relies on to record the
+    // failure, simulating e.g. a closed connection or a disk-full error at
+    // the exact moment the pipeline tries to report that something else
+    // went wrong. Identified by its `status: 'failed'` value rather than a
+    // magic call count: stage-tracking now writes to the same row ahead of
+    // this one (setStatus('running'), then a setStage per stage reached
+    // before the 403), and a fixed index would silently start targeting the
+    // wrong write every time a new stage-tracking call is added upstream.
     const originalUpdate = ctx.db.update.bind(ctx.db);
     ctx.db.update = ((...args: Parameters<typeof originalUpdate>) => {
-      updateCallCount++;
-      if (updateCallCount === 2) {
-        throw new Error('simulated disk failure while recording status');
-      }
-      return originalUpdate(...args);
+      const builder = originalUpdate(...args);
+      const originalSet = builder.set.bind(builder);
+      builder.set = ((values: Record<string, unknown>) => {
+        if (values['status'] === 'failed') {
+          throw new Error('simulated disk failure while recording status');
+        }
+        return originalSet(values);
+      }) as typeof builder.set;
+      return builder;
     }) as typeof ctx.db.update;
 
     await expect(runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep }))
@@ -245,6 +324,41 @@ describe('runExtraction in fixture mode', () => {
 });
 
 describe('runExtraction in live mode', () => {
+  it('sets the stage through the full six-stage sequence, then clears it on completion', async () => {
+    const ctx = ctxWith('live', { EXTRACTION_LIMIT: '20' });
+    withStoredToken(ctx.db);
+
+    const fetch = vi.fn().mockImplementation(async (url: string | URL) => {
+      const href = String(url);
+      if (href.includes('portabilityArchive:initiate')) {
+        return new Response(JSON.stringify({ archiveJobId: 'job-1', accessType: 'ACCESS_TYPE_ONE_TIME' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (href.includes('portabilityArchiveState')) {
+        return new Response(JSON.stringify({
+          state: 'COMPLETE', urls: ['https://signed/good.csv'],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (href === 'https://signed/good.csv') {
+        return new Response('title,item_content_url\nGood Place,https://www.google.com/maps/place/Good/\n', { status: 200 });
+      }
+      if (href.includes('places:searchText')) return placesOk.clone();
+      throw new Error(`unexpected fetch to ${href}`);
+    });
+
+    const writes = captureExtractionWrites(ctx.db);
+
+    await runExtraction('e1', 'u1', ctx, { fetch: fetch as never, sleep: noSleep });
+
+    const stages = writes.filter((w) => 'stage' in w).map((w) => w.stage);
+    expect(stages).toEqual(['requesting', 'preparing', 'downloading', 'reading', 'resolving', 'organizing', null]);
+
+    const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
+    expect(row.status).toBe('complete');
+    expect(row.stage).toBeNull();
+  });
+
   it('times out, keeps the archiveJobId, and marks the extraction timed_out', async () => {
     // Re-initiating an archive burns the one-time Portability consent, so a
     // stalled job must stay resumable: the archiveJobId recorded once the
@@ -279,6 +393,8 @@ describe('runExtraction in live mode', () => {
     const fakeNow = () => clock;
     const fastForward = vi.fn(async (ms: number) => { clock += ms; });
 
+    const writes = captureExtractionWrites(ctx.db);
+
     await runExtraction('e1', 'u1', ctx, {
       fetch: fetch as never,
       sleep: fastForward,
@@ -286,9 +402,17 @@ describe('runExtraction in live mode', () => {
       pollTimeoutMs: 60_000,
     });
 
+    // Stalled forever in IN_PROGRESS: the run never gets past preparing --
+    // no downloading/reading/resolving/organizing -- and the terminal write
+    // still clears the stage rather than leaving 'preparing' stuck on a row
+    // the UI would otherwise read as still actively polling.
+    const stages = writes.filter((w) => 'stage' in w).map((w) => w.stage);
+    expect(stages).toEqual(['requesting', 'preparing', null]);
+
     const row = ctx.db.select().from(extractions).where(eq(extractions.id, 'e1')).all()[0]!;
     expect(row.status).toBe('timed_out');
     expect(row.archiveJobId).toBe('job-1');
+    expect(row.stage).toBeNull();
 
     // Math.min(2 ** attempt * 2000, 30_000): 2000, 4000, 8000, 16000, then
     // capped at 30000 for every attempt after. Pin both the growth and the

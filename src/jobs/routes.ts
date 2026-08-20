@@ -76,6 +76,8 @@ export async function jobRoutes(
       archiveJobId: row.archiveJobId,
       error: row.error,
       warnings: row.warnings,
+      stage: row.stage,
+      stageDetail: row.stageDetail,
     });
   });
 

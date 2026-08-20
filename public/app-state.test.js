@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState, escapeHtml,
+  resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState, escapeHtml, describeStage,
+  shouldRepaintStage,
 } from './app-state.js';
 
 describe('resolveView', () => {
@@ -144,5 +145,112 @@ describe('escapeHtml', () => {
     expect(escapeHtml(null)).toBe('null');
     expect(escapeHtml(undefined)).toBe('undefined');
     expect(escapeHtml(42)).toBe('42');
+  });
+});
+
+describe('describeStage', () => {
+  const STAGE_KEYS = ['requesting', 'preparing', 'downloading', 'reading', 'resolving', 'organizing'];
+
+  it('pins the full six-stage sequence to its own label and index -- a mapping ' +
+     'that returned one constant value for every stage would still pass a test ' +
+     'that only checked truthiness or object shape, so this pins the exact arrays', () => {
+    const labels = STAGE_KEYS.map((key) => describeStage(key, null).label);
+    const indices = STAGE_KEYS.map((key) => describeStage(key, null).index);
+
+    expect(labels).toEqual([
+      'Asking Google for your places',
+      'Google is preparing your export',
+      'Downloading your export',
+      'Reading your saved lists',
+      'Looking up your places',
+      'Putting your list together',
+    ]);
+    expect(indices).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it('gives every stage its own exact sublabel', () => {
+    const sublabels = STAGE_KEYS.map((key) => describeStage(key, null).sublabel);
+
+    expect(sublabels).toEqual([
+      'Sending the export request.',
+      'This usually takes two to five minutes. Nothing to do but wait.',
+      'Collecting the archive Google just built.',
+      'Pulling the places out of the export.',
+      'Matching each pin to a real place and giving it a category.',
+      'Saving everything and noting anything that needs a look.',
+    ]);
+  });
+
+  it('appends running progress to the resolving sublabel when stageDetail is present', () => {
+    expect(describeStage('resolving', '12 of 20')).toEqual({
+      label: 'Looking up your places',
+      sublabel: 'Matching each pin to a real place and giving it a category — 12 of 20 so far.',
+      index: 4,
+    });
+  });
+
+  it('renders a clean resolving sublabel with no dangling dash when stageDetail is absent', () => {
+    // stageDetail is set only during resolving and setStage clears it on
+    // every transition, so a zero-place run reaches resolving having never
+    // set it at all -- this must not render a trailing "— ".
+    expect(describeStage('resolving', null).sublabel)
+      .toBe('Matching each pin to a real place and giving it a category.');
+    expect(describeStage('resolving', undefined).sublabel).not.toContain('—');
+  });
+
+  it('treats a missing stage as a real first-run state, not "unknown"', () => {
+    expect(describeStage(null, null)).toEqual({
+      label: 'Getting started',
+      sublabel: 'Setting up your run.',
+      index: 0,
+    });
+    expect(describeStage(undefined, undefined)).toEqual({
+      label: 'Getting started',
+      sublabel: 'Setting up your run.',
+      index: 0,
+    });
+  });
+
+  it('does not crash and does not print "undefined" for an unrecognized stage string', () => {
+    // Server/client skew is a bug signal, not a future stage worth guessing
+    // at -- index: null so the rail lights nothing and the step counter hides.
+    const result = describeStage('some-future-stage', null);
+    expect(result).toEqual({ label: 'Working…', sublabel: '', index: null });
+    expect(result.label).not.toContain('undefined');
+    expect(result.sublabel).not.toContain('undefined');
+  });
+});
+
+describe('shouldRepaintStage', () => {
+  it('repaints while the run is still going', () => {
+    expect(shouldRepaintStage({ ok: true, body: { status: 'running' } })).toBe(true);
+    expect(shouldRepaintStage({ ok: true, body: { status: 'pending' } })).toBe(true);
+  });
+
+  // The regression this function was extracted for. setStatus nulls stage on
+  // every terminal status, so repainting on the poll that discovers one
+  // rewinds the screen from "Putting your list together / Step 6 of 6" to
+  // "Getting started / Step 1 of 6" and holds it there for the length of the
+  // results fetch -- exactly when the finished list should be appearing. All
+  // three terminal statuses are asserted as one array because a fix that
+  // special-cased only 'complete' would leave the same rewind on both
+  // failure paths.
+  it('does not repaint on any terminal status, whose stage the server has nulled', () => {
+    const statuses = ['complete', 'failed', 'timed_out'];
+    expect(statuses.map((status) => shouldRepaintStage({ ok: true, body: { status } })))
+      .toEqual([false, false, false]);
+  });
+
+  it('does not repaint when the status fetch failed, so a blip keeps the last stage', () => {
+    // Both shapes poll() can produce: a thrown fetch (undefined), and a
+    // non-ok response, which getJson returns as {ok:false, body:null} rather
+    // than throwing. A guard written only against `undefined` would sail past
+    // the second and repaint a stage read off a null body.
+    expect(shouldRepaintStage(undefined)).toBe(false);
+    expect(shouldRepaintStage({ ok: false, body: null })).toBe(false);
+  });
+
+  it('does not repaint for an unrecognized status, matching terminalState', () => {
+    expect(shouldRepaintStage({ ok: true, body: { status: 'some-future-status' } })).toBe(false);
   });
 });

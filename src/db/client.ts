@@ -154,6 +154,8 @@ export function migrate(db: Db): void {
        archive_job_id TEXT,
        error TEXT,
        warnings TEXT,
+       stage TEXT,
+       stage_detail TEXT,
        created_at INTEGER NOT NULL,
        updated_at INTEGER NOT NULL
      )`,
@@ -187,4 +189,10 @@ export function migrate(db: Db): void {
   // already has the extractions table, so the column needs its own
   // idempotent step to reach a pre-existing database.
   addColumnIfMissing(db, 'extractions', 'warnings', 'TEXT');
+
+  // extractions.stage/stage_detail were added after the initial schema
+  // shipped, same reasoning as warnings above: CREATE TABLE IF NOT EXISTS is
+  // a no-op against a database that already has the extractions table.
+  addColumnIfMissing(db, 'extractions', 'stage', 'TEXT');
+  addColumnIfMissing(db, 'extractions', 'stage_detail', 'TEXT');
 }

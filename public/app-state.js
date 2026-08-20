@@ -67,6 +67,33 @@ export function terminalState(status) {
 }
 
 /**
+ * Whether a poll result should repaint the full-screen stage display.
+ *
+ * Two distinct ways a repaint is wrong, and both have bitten:
+ *
+ * A *failed fetch* (thrown, or a non-ok response -- getJson returns
+ * `{ok:false, body:null}` for the latter rather than throwing) carries no
+ * stage at all. Repainting would flip a correct "Google is preparing your
+ * export" back to "Getting started" on every network hiccup.
+ *
+ * A *terminal status* carries `stage: null` deliberately -- setStatus in
+ * src/jobs/pipeline.ts nulls stage and stageDetail for every status in
+ * TERMINAL_STATUSES. So the very poll that discovers 'complete' would rewind
+ * the screen from "Putting your list together / Step 6 of 6" to "Getting
+ * started / Step 1 of 6" and hold there for the length of the results fetch
+ * -- precisely when the finished list should be appearing.
+ *
+ * Lives here rather than in app.js for the same reason terminalState does:
+ * it is a business decision, and app.js has no tests by design.
+ * @param {{ ok: boolean, body: { status?: string }|null }|undefined} status
+ * @returns {boolean}
+ */
+export function shouldRepaintStage(status) {
+  if (!status?.ok) return false;
+  return terminalState(status.body?.status) === 'pending';
+}
+
+/**
  * Place names, addresses and notes are user data that arrived from Google --
  * never trust them as markup. Lives here, not app.js, because app.js has no
  * tests by design and this is the highest-consequence logic in the client.
@@ -76,6 +103,49 @@ export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[character]));
+}
+
+const STAGES = [
+  { key: 'requesting', label: 'Asking Google for your places', sublabel: 'Sending the export request.' },
+  { key: 'preparing', label: 'Google is preparing your export', sublabel: 'This usually takes two to five minutes. Nothing to do but wait.' },
+  { key: 'downloading', label: 'Downloading your export', sublabel: 'Collecting the archive Google just built.' },
+  { key: 'reading', label: 'Reading your saved lists', sublabel: 'Pulling the places out of the export.' },
+  { key: 'resolving', label: 'Looking up your places', sublabel: 'Matching each pin to a real place and giving it a category.' },
+  { key: 'organizing', label: 'Putting your list together', sublabel: 'Saving everything and noting anything that needs a look.' },
+];
+
+/**
+ * Maps a pipeline `stage` (and, for `resolving`, its `stageDetail`) to what
+ * the full-screen running view renders. Pure and exhaustively tested
+ * because app.js has no tests by design -- see its header comment.
+ *
+ * `stage` is `null`/`undefined` for a run that has started but not yet
+ * recorded its first stage -- a real state, not "unknown". An unrecognized
+ * stage string is server/client skew -- a bug signal, not a future stage
+ * worth guessing at. Neither case may crash or print "undefined" on screen.
+ * @param {string|null|undefined} stage
+ * @param {string|null|undefined} stageDetail
+ * @returns {{ label: string, sublabel: string, index: number|null }}
+ */
+export function describeStage(stage, stageDetail) {
+  if (stage === null || stage === undefined) {
+    return { label: 'Getting started', sublabel: 'Setting up your run.', index: 0 };
+  }
+
+  const index = STAGES.findIndex((entry) => entry.key === stage);
+  if (index === -1) {
+    return { label: 'Working…', sublabel: '', index: null };
+  }
+
+  const { label, sublabel } = STAGES[index];
+  // Only `resolving` ever carries a stageDetail (see setResolvingProgress in
+  // src/jobs/pipeline.ts); every other stage, and resolving before its first
+  // progress tick, must render the plain sublabel with no dangling dash.
+  const rendered = stage === 'resolving' && stageDetail
+    ? `${sublabel.replace(/\.$/, '')} — ${stageDetail} so far.`
+    : sublabel;
+
+  return { label, sublabel: rendered, index };
 }
 
 /**

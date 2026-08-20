@@ -53,8 +53,21 @@
     </section>
 
     <section id="view-running" hidden>
-      <p>Google is building your archive. <span id="elapsed"></span></p>
-      <p class="note" id="running-status"></p>
+      <div class="running">
+        <p class="running-step" id="running-step" hidden></p>
+        <h2 class="running-label" id="running-label"></h2>
+        <p class="note running-sublabel" id="running-status"></p>
+        <div class="rail" id="running-rail" aria-hidden="true">
+          <span class="rail-segment"></span>
+          <span class="rail-segment"></span>
+          <span class="rail-segment"></span>
+          <span class="rail-segment"></span>
+          <span class="rail-segment"></span>
+          <span class="rail-segment"></span>
+        </div>
+        <p class="running-elapsed"><span id="elapsed"></span> elapsed</p>
+        <p class="note running-reconnect" id="reconnecting-note" hidden>Reconnecting&hellip;</p>
+      </div>
     </section>
 
     <section id="view-done" hidden>

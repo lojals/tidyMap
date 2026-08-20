@@ -3,6 +3,16 @@ import { categorize } from '../categorize/taxonomy.js';
 import { extractCity, extractCountry } from './address.js';
 import { searchText, type PlacesDeps, type PlaceSearchResult } from './places-client.js';
 
+export interface EnrichDeps extends PlacesDeps {
+  /**
+   * Reported once per item, after it has been resolved (matched, unmatched,
+   * or served from cache) -- not once per Places call, so a run whose items
+   * collapse onto a handful of cached queries still reports one increment
+   * per input item, matching what the caller is waiting on.
+   */
+  onProgress?: (done: number, total: number) => void;
+}
+
 function searchTextFor(item: SavedItem): string {
   return item.address ? `${item.title} ${item.address}` : item.title;
 }
@@ -67,10 +77,11 @@ function toResolvedPlace(item: SavedItem, match: PlaceSearchResult | null): Reso
  * never merged — without a placeId there is no evidence they are the same place.
  * Results are cached per query so repeats within a run cost nothing.
  */
-export async function enrich(items: SavedItem[], deps: PlacesDeps): Promise<ResolvedPlace[]> {
+export async function enrich(items: SavedItem[], deps: EnrichDeps): Promise<ResolvedPlace[]> {
   const cache = new Map<string, PlaceSearchResult | null>();
   const byPlaceId = new Map<string, ResolvedPlace>();
   const unresolved: ResolvedPlace[] = [];
+  let done = 0;
 
   for (const item of items) {
     const text = searchTextFor(item);
@@ -100,18 +111,20 @@ export async function enrich(items: SavedItem[], deps: PlacesDeps): Promise<Reso
 
     if (!place.placeId) {
       unresolved.push(place);
-      continue;
+    } else {
+      const existing = byPlaceId.get(place.placeId);
+      if (existing) {
+        for (const list of place.sourceLists) {
+          if (!existing.sourceLists.includes(list)) existing.sourceLists.push(list);
+        }
+        existing.note = mergeNotes(existing.note, place.note);
+      } else {
+        byPlaceId.set(place.placeId, place);
+      }
     }
 
-    const existing = byPlaceId.get(place.placeId);
-    if (existing) {
-      for (const list of place.sourceLists) {
-        if (!existing.sourceLists.includes(list)) existing.sourceLists.push(list);
-      }
-      existing.note = mergeNotes(existing.note, place.note);
-    } else {
-      byPlaceId.set(place.placeId, place);
-    }
+    done++;
+    deps.onProgress?.(done, items.length);
   }
 
   return [...byPlaceId.values(), ...unresolved];
