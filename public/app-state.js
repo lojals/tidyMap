@@ -16,6 +16,9 @@ export function resolveView(input) {
 
   if (newest.status === 'pending' || newest.status === 'running') return 'running';
   if (newest.status === 'complete') return 'done';
+  // Falls through to 'failed' for anything else, including a status string
+  // this client doesn't recognize -- see the comment on terminalState below,
+  // which makes the same call for the same reason.
   return 'failed';
 }
 
@@ -43,13 +46,36 @@ export function pollDelayMs(elapsedMs) {
  * Whether a job status means the pipeline has stopped, and how it ended.
  * Lives here rather than in app.js because which statuses are terminal is a
  * business decision, and app.js has no tests by design.
+ *
+ * `undefined` is its own case, not "unrecognized" -- poll() in app.js passes
+ * it specifically when a status *fetch* failed (network blip, server
+ * restart), and the deliberate call there is to keep polling rather than
+ * strand the page. An actual status *string* the client doesn't recognize is
+ * different: server and client ship together in this app, so an unfamiliar
+ * value is a bug signal, not a future state worth waiting out. That case
+ * resolves to 'failed', matching resolveView's fallthrough above, so the
+ * user gets the reset escape hatch instead of polling a status that will
+ * never resolve.
  * @param {string|undefined} status
  * @returns {'complete'|'failed'|'pending'}
  */
 export function terminalState(status) {
   if (status === 'complete') return 'complete';
   if (status === 'failed' || status === 'timed_out') return 'failed';
-  return 'pending';
+  if (status === 'pending' || status === 'running' || status === undefined) return 'pending';
+  return 'failed';
+}
+
+/**
+ * Place names, addresses and notes are user data that arrived from Google --
+ * never trust them as markup. Lives here, not app.js, because app.js has no
+ * tests by design and this is the highest-consequence logic in the client.
+ * @param {unknown} value
+ */
+export function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[character]));
 }
 
 /**

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState } from './app-state.js';
+import {
+  resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState, escapeHtml,
+} from './app-state.js';
 
 describe('resolveView', () => {
   it('is signed-out when the listing was unauthorized', () => {
@@ -30,6 +32,10 @@ describe('resolveView', () => {
       authorized: true,
       extractions: [{ status: 'running' }, { status: 'complete' }],
     })).toBe('running');
+  });
+
+  it('is failed for an unrecognized status, so a bug does not read as a stuck run', () => {
+    expect(resolveView({ authorized: true, extractions: [{ status: 'bogus' }] })).toBe('failed');
   });
 });
 
@@ -105,5 +111,38 @@ describe('terminalState', () => {
 
   it('is pending for an undefined status, e.g. a poll that could not reach the server', () => {
     expect(terminalState(undefined)).toBe('pending');
+  });
+
+  it('is failed for an unrecognized status, matching resolveView on the same case', () => {
+    // Deliberately not 'pending': undefined means "the fetch itself failed",
+    // which is worth retrying, but an actual unfamiliar status string means
+    // the server said something this client doesn't understand -- a bug, not
+    // a state worth polling forever. resolveView makes the same call.
+    expect(terminalState('bogus')).toBe('failed');
+  });
+});
+
+describe('escapeHtml', () => {
+  it('escapes every HTML-significant character', () => {
+    expect(escapeHtml('&')).toBe('&amp;');
+    expect(escapeHtml('<')).toBe('&lt;');
+    expect(escapeHtml('>')).toBe('&gt;');
+    expect(escapeHtml('"')).toBe('&quot;');
+    expect(escapeHtml("'")).toBe('&#39;');
+  });
+
+  it('escapes a mix in one pass, including a naive script-tag attempt', () => {
+    expect(escapeHtml('<script>alert("x")</script>'))
+      .toBe('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;');
+  });
+
+  it('leaves ordinary text untouched', () => {
+    expect(escapeHtml('Bar Cañete')).toBe('Bar Cañete');
+  });
+
+  it('coerces a non-string value via String() rather than throwing', () => {
+    expect(escapeHtml(null)).toBe('null');
+    expect(escapeHtml(undefined)).toBe('undefined');
+    expect(escapeHtml(42)).toBe('42');
   });
 });
