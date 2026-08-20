@@ -25,11 +25,16 @@ export async function jobRoutes(
 ): Promise<void> {
   app.post<{ Body: { userId?: string } }>('/extractions', async (request, reply) => {
     const userId = identityFrom(request);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    if (!userId) return reply.code(401).send({ error: 'Not signed in.' });
 
     const user = ctx.db.select().from(users).where(eq(users.id, userId)).all();
     if (!user[0]) {
-      return reply.code(400).send({ error: `Unknown userId "${userId}". Authorize at GET /auth/google.` });
+      // userId is echoed nowhere here: it now most often comes straight from
+      // the HttpOnly tidymap_uid cookie, and interpolating it into a 400 body
+      // would let any same-origin script read the cookie's value back out of
+      // an ordinary POST response -- defeating httpOnly's whole point (see
+      // the comment on sessionCookieOptions in src/auth/identity.ts).
+      return reply.code(400).send({ error: 'Unknown user. Authorize at GET /auth/google.' });
     }
 
     const jobId = randomUUID();

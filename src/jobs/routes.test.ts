@@ -129,6 +129,33 @@ describe('extraction endpoints', () => {
     expect(response.statusCode).toBe(400);
   });
 
+  it('does not echo the identifier back in the unknown-userId 400 body', async () => {
+    // userId now arrives from the HttpOnly tidymap_uid cookie in normal use.
+    // Echoing it into a 400 body would let any same-origin script recover
+    // the cookie's value from an ordinary POST response, defeating the
+    // httpOnly attribute's documented purpose (src/auth/identity.ts). This
+    // covers the realistic path: a stale/forged cookie naming a userId with
+    // no matching users row, not just the body-userId fallback above.
+    const { app } = buildTestServer();
+    const response = await app.inject({
+      method: 'POST', url: '/extractions',
+      cookies: { [SESSION_COOKIE]: 'stale-cookie-value' },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).not.toContain('stale-cookie-value');
+  });
+
+  it('returns 401, not 400, when POST /extractions has no identity at all', async () => {
+    // Missing identity ("not signed in") is a different condition from an
+    // identity that IS present but names no such user (the stale-cookie
+    // test above, which stays 400) -- both routes that read identityFrom
+    // should agree with GET /extractions's 401 for this case.
+    const { app } = buildTestServer();
+    const response = await app.inject({ method: 'POST', url: '/extractions', payload: {} });
+    expect(response.statusCode).toBe(401);
+  });
+
   it('accepts identity from the session cookie with no body userId', async () => {
     const { app } = buildTestServer();
     const created = await app.inject({

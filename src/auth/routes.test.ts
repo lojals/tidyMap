@@ -244,14 +244,18 @@ describe('authRoutes', () => {
     expect(response.json()).toEqual({ error: 'Missing authorization code.' });
   });
 
-  it('POST /auth/reset with no body returns 400 rather than throwing on request.body.userId', async () => {
+  it('POST /auth/reset with no body returns 401 rather than throwing on request.body.userId', async () => {
     const { db } = buildApp();
     const app = await buildServer(db);
 
     const response = await app.inject({ method: 'POST', url: '/auth/reset' });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: 'userId is required.' });
+    // Missing identity is "not signed in", same status as GET /extractions
+    // uses for the same condition -- 400 is reserved for an identity that IS
+    // present but names no such user (see jobs/routes.test.ts's stale-cookie
+    // test for that distinct case).
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'Not signed in.' });
   });
 
   it('POST /auth/reset resets authorization using the access token for that user', async () => {

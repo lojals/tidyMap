@@ -51,7 +51,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
 
   app.post<{ Body: { userId?: string } }>('/auth/reset', async (request, reply) => {
     const userId = identityFrom(request);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    if (!userId) return reply.code(401).send({ error: 'Not signed in.' });
 
     const accessToken = await getValidAccessToken(ctx.db, userId, ctx.config);
     await resetAuthorization(accessToken);
