@@ -45,6 +45,20 @@ export async function jobRoutes(
     return reply.code(202).send({ jobId, status: 'pending' });
   });
 
+  app.get('/extractions', async (request, reply) => {
+    const userId = identityFrom(request);
+    if (!userId) return reply.code(401).send({ error: 'Not signed in.' });
+
+    const rows = ctx.db.select().from(extractions)
+      .where(eq(extractions.userId, userId)).all();
+
+    return reply.send({
+      extractions: rows
+        .map((row) => ({ jobId: row.id, status: row.status, createdAt: row.createdAt }))
+        .sort((a, b) => b.createdAt - a.createdAt),
+    });
+  });
+
   app.get<{ Params: { jobId: string } }>('/extractions/:jobId', async (request, reply) => {
     const rows = ctx.db.select().from(extractions)
       .where(eq(extractions.id, request.params.jobId)).all();

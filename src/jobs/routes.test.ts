@@ -156,4 +156,41 @@ describe('extraction endpoints', () => {
     const row = db.select().from(extractions).where(eq(extractions.id, jobId)).all()[0]!;
     expect(row.userId).toBe('u1');
   });
+
+  it('lists the caller extractions newest first', async () => {
+    const { app, db } = buildTestServer();
+    db.insert(extractions).values([
+      { id: 'old', userId: 'u1', status: 'complete', createdAt: 1000, updatedAt: 1000 },
+      { id: 'new', userId: 'u1', status: 'running', createdAt: 2000, updatedAt: 2000 },
+    ]).run();
+
+    const response = await app.inject({
+      method: 'GET', url: '/extractions', cookies: { [SESSION_COOKIE]: 'u1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ extractions: { jobId: string }[] }>().extractions.map((e) => e.jobId))
+      .toEqual(['new', 'old']);
+  });
+
+  it('returns 401 when there is no identity, which the UI reads as signed out', async () => {
+    const { app } = buildTestServer();
+    const response = await app.inject({ method: 'GET', url: '/extractions' });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('never lists another user extractions', async () => {
+    const { app, db } = buildTestServer();
+    db.insert(users).values({ id: 'other', createdAt: 0 }).run();
+    db.insert(extractions).values([
+      { id: 'mine', userId: 'u1', status: 'complete', createdAt: 1, updatedAt: 1 },
+      { id: 'theirs', userId: 'other', status: 'complete', createdAt: 2, updatedAt: 2 },
+    ]).run();
+
+    const response = await app.inject({
+      method: 'GET', url: '/extractions', cookies: { [SESSION_COOKIE]: 'u1' },
+    });
+    expect(response.json<{ extractions: { jobId: string }[] }>().extractions.map((e) => e.jobId))
+      .toEqual(['mine']);
+  });
 });
