@@ -4,6 +4,7 @@ import { buildServer } from '../server.js';
 import { createDb, migrate } from '../db/client.js';
 import { users, extractions } from '../db/schema.js';
 import { loadConfig } from '../config.js';
+import { SESSION_COOKIE } from '../auth/identity.js';
 import type { GroupedResult, ResolvedPlace } from '../domain/types.js';
 
 const placesOk = () => new Response(JSON.stringify({
@@ -132,7 +133,10 @@ describe('extraction endpoints', () => {
     const { app } = buildTestServer();
     const created = await app.inject({
       method: 'POST', url: '/extractions',
-      cookies: { tidymap_uid: 'u1' },
+      // Computed key: app.inject's `cookies` option needs a literal
+      // property name, and SESSION_COOKIE must stay the single source of
+      // truth for the cookie name so this test can't drift from it.
+      cookies: { [SESSION_COOKIE]: 'u1' },
       payload: {},
     });
     expect(created.statusCode).toBe(202);
@@ -144,7 +148,7 @@ describe('extraction endpoints', () => {
 
     const created = await app.inject({
       method: 'POST', url: '/extractions',
-      cookies: { tidymap_uid: 'u1' },
+      cookies: { [SESSION_COOKIE]: 'u1' },
       payload: { userId: 'u2' },
     });
 

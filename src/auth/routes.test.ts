@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import { authRoutes } from './routes.js';
 import { createAuthState } from './oauth.js';
+import { SESSION_COOKIE } from './identity.js';
 import { createDb, migrate } from '../db/client.js';
 import { users, oauthTokens, oauthStates } from '../db/schema.js';
 import { loadConfig } from '../config.js';
@@ -211,13 +212,22 @@ describe('authRoutes', () => {
     expect(response.headers.location).toBe('/');
 
     const setCookie = String(response.headers['set-cookie']);
-    expect(setCookie).toContain('tidymap_uid=');
+    expect(setCookie).toContain(`${SESSION_COOKIE}=`);
     expect(setCookie).toContain('HttpOnly');
     // SameSite=Lax is what stops a cross-site POST to the unauthenticated,
     // destructive /auth/reset once a cookie carries identity. A bare
     // 'SameSite' substring would also match 'SameSite=None', so the
     // assertion pins the full attribute pair.
     expect(setCookie).toContain('SameSite=Lax');
+
+    // A substring check for the cookie name alone passes for any value --
+    // pin it to the actual userId persistTokens inserted (the sole row in
+    // `users`), not merely to the cookie's presence.
+    const insertedUsers = db.select().from(users).all();
+    expect(insertedUsers).toHaveLength(1);
+
+    const value = setCookie.split(';')[0]!.split('=')[1];
+    expect(value).toBe(insertedUsers[0]!.id);
   });
 
   it('returns 400 for a missing code when the state is valid and there is no error', async () => {
