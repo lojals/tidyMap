@@ -39,7 +39,7 @@ export interface ResolvedPlace {
    * `places.payload` is a JSON column, so old rows were never migrated. Treat
    * it as possibly undefined when reading stored payloads.
    */
-  types: string[];
+  types?: string[];
   lat: number | null;
   lng: number | null;
   sourceLists: string[];
