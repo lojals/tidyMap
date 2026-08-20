@@ -53,6 +53,7 @@ describe('enrich', () => {
       placeId: null, name: 'Ghost Bar', category: 'Unknown',
       city: null, resolved: false, note: 'keep me',
       mapsUrl: 'https://maps.google.com/?cid=123', lat: 41.1, lng: 2.2,
+      types: [],
     });
   });
 

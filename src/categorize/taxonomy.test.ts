@@ -47,7 +47,9 @@ describe('categorize', () => {
   });
 
   it('prefers primaryType over any secondary type', () => {
-    expect(categorize('cafe', ['cafe', 'tourist_attraction'])).toBe('Food & Drink');
+    // Disjoint categories on purpose: with the same type in both positions
+    // this assertion passes under either priority order and pins nothing.
+    expect(categorize('museum', ['park'])).toBe('Culture');
   });
 
   it('uses the FIRST mappable secondary type, not the last', () => {
