@@ -6,3 +6,6 @@ dist/
 *.db-wal
 *.db-shm
 data/
+
+# Scratch: SDD ledgers and brainstorm mockups
+.superpowers/
