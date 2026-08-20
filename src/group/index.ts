@@ -1,11 +1,39 @@
-import type { GroupBy, GroupedResult, PlaceGroup, ResolvedPlace } from '../domain/types.js';
+import {
+  emojiForCategory, FALLBACK_EMOJI, CITY_EMOJI, COUNTRY_EMOJI, CATEGORIES,
+} from '../categorize/taxonomy.js';
+import type { Category, GroupBy, GroupedResult, PlaceGroup, ResolvedPlace } from '../domain/types.js';
+
+// Derived from taxonomy's CATEGORIES rather than listed again here, so this
+// set can't drift out of sync with the emoji table it mirrors.
+const CURATED: ReadonlySet<string> = new Set<Category>(CATEGORIES);
+
+/** `yak_rental` -> `Yak Rental`. */
+function readableType(type: string): string {
+  return type
+    .split('_')
+    .filter((word) => word.length > 0)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
 
 function keyFor(place: ResolvedPlace, groupBy: GroupBy): string {
   switch (groupBy) {
-    case 'category': return place.category;
+    case 'category':
+      // A place Google typed but our table does not cover becomes its own
+      // group rather than joining one useless Unknown pile. Places with no
+      // type at all -- or whose type has no readable words once stripped of
+      // separators -- have nothing better to say and stay Unknown.
+      if (place.category !== 'Unknown') return place.category;
+      return (place.primaryType && readableType(place.primaryType)) || 'Unknown';
     case 'city': return place.city ?? 'Unknown';
     case 'country': return place.country ?? 'Unknown';
   }
+}
+
+function emojiFor(key: string, groupBy: GroupBy): string {
+  if (groupBy === 'city') return CITY_EMOJI;
+  if (groupBy === 'country') return COUNTRY_EMOJI;
+  return CURATED.has(key) ? emojiForCategory(key as Category) : FALLBACK_EMOJI;
 }
 
 /**
@@ -27,7 +55,11 @@ export function group(places: ResolvedPlace[], groupBy: GroupBy): GroupedResult 
   const results: PlaceGroup[] = [...buckets.entries()]
     .sort(([aKey, aPlaces], [bKey, bPlaces]) =>
       bPlaces.length - aPlaces.length || aKey.localeCompare(bKey))
-    .map(([key, bucketPlaces]) => ({ [groupBy]: key, places: bucketPlaces }));
+    .map(([key, bucketPlaces]) => ({
+      [groupBy]: key,
+      emoji: emojiFor(key, groupBy),
+      places: bucketPlaces,
+    }));
 
   return {
     groupBy,

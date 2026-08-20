@@ -5,6 +5,7 @@ import {
   getValidAccessToken,
 } from './oauth.js';
 import { resetAuthorization } from '../portability/client.js';
+import { SESSION_COOKIE, identityFrom, sessionCookieOptions } from './identity.js';
 
 export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
   app.get('/auth/google', async (_request, reply) => {
@@ -39,20 +40,18 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext): Promise
       const tokens = await exchangeCode(code, ctx.config);
       const userId = persistTokens(ctx.db, tokens);
 
-      // No email to report: Portability-only consent never yields one (see
-      // src/auth/oauth.ts). userId is an opaque randomUUID, minted fresh on
-      // every completed consent -- Google gives this server no way to
-      // recognize a returning account, so there is no identity to echo back.
-      return reply.send({
-        userId,
-        next: `POST /extractions with { "userId": "${userId}" }`,
-      });
+      // Redirect rather than render JSON: after consent the browser lands
+      // here, and the user should end up in the app. The opaque userId stays
+      // in an HttpOnly cookie so it never reaches the URL or browser history.
+      return reply
+        .setCookie(SESSION_COOKIE, userId, sessionCookieOptions())
+        .redirect('/', 302);
     },
   );
 
-  app.post<{ Body: { userId: string } }>('/auth/reset', async (request, reply) => {
-    const { userId } = request.body ?? {};
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+  app.post<{ Body: { userId?: string } }>('/auth/reset', async (request, reply) => {
+    const userId = identityFrom(request);
+    if (!userId) return reply.code(401).send({ error: 'Not signed in.' });
 
     const accessToken = await getValidAccessToken(ctx.db, userId, ctx.config);
     await resetAuthorization(accessToken);

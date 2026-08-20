@@ -53,6 +53,7 @@ describe('enrich', () => {
       placeId: null, name: 'Ghost Bar', category: 'Unknown',
       city: null, resolved: false, note: 'keep me',
       mapsUrl: 'https://maps.google.com/?cid=123', lat: 41.1, lng: 2.2,
+      types: [],
     });
   });
 
@@ -116,6 +117,37 @@ describe('enrich', () => {
       item({ sourceId: 'b', title: 'Same Place' }),
     ], { apiKey: 'K', fetch: fetch as never, sleep: noSleep });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rescues a place whose primaryType is unmapped but whose types[] maps', async () => {
+    const rescued = () => new Response(JSON.stringify({
+      places: [{
+        id: 'ChIJrescue',
+        displayName: { text: 'Odd Museum' },
+        primaryType: 'yak_rental',
+        types: ['yak_rental', 'museum'],
+        addressComponents: [{ longText: 'Spain', shortText: 'ES', types: ['country'] }],
+      }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+    const fetch = vi.fn().mockImplementation(async () => rescued());
+    const [place] = await enrich([item({})], { apiKey: 'K', fetch: fetch as never, sleep: noSleep });
+
+    expect(place!.category).toBe('Culture');
+    expect(place!.primaryType).toBe('yak_rental');
+    expect(place!.types).toEqual(['yak_rental', 'museum']);
+  });
+
+  it('stores an empty types array when Google returns none', async () => {
+    const noTypes = () => new Response(JSON.stringify({
+      places: [{ id: 'ChIJbare', displayName: { text: 'Bare' }, primaryType: 'cafe' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+    const fetch = vi.fn().mockImplementation(async () => noTypes());
+    const [place] = await enrich([item({})], { apiKey: 'K', fetch: fetch as never, sleep: noSleep });
+
+    expect(place!.types).toEqual([]);
+    expect(place!.category).toBe('Food & Drink');
   });
 
   describe('note merging on dedupe', () => {

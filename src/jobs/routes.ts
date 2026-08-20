@@ -6,6 +6,7 @@ import type { GroupBy, ResolvedPlace } from '../domain/types.js';
 import { extractions, places, users } from '../db/schema.js';
 import { group } from '../group/index.js';
 import { runExtraction, type PipelineDeps } from './pipeline.js';
+import { identityFrom } from '../auth/identity.js';
 
 const GROUP_BY_VALUES: GroupBy[] = ['category', 'city', 'country'];
 
@@ -22,13 +23,18 @@ export async function jobRoutes(
   ctx: AppContext,
   deps: JobRouteDeps = {},
 ): Promise<void> {
-  app.post<{ Body: { userId: string } }>('/extractions', async (request, reply) => {
-    const { userId } = request.body ?? {};
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+  app.post<{ Body: { userId?: string } }>('/extractions', async (request, reply) => {
+    const userId = identityFrom(request);
+    if (!userId) return reply.code(401).send({ error: 'Not signed in.' });
 
     const user = ctx.db.select().from(users).where(eq(users.id, userId)).all();
     if (!user[0]) {
-      return reply.code(400).send({ error: `Unknown userId "${userId}". Authorize at GET /auth/google.` });
+      // userId is echoed nowhere here: it now most often comes straight from
+      // the HttpOnly tidymap_uid cookie, and interpolating it into a 400 body
+      // would let any same-origin script read the cookie's value back out of
+      // an ordinary POST response -- defeating httpOnly's whole point (see
+      // the comment on sessionCookieOptions in src/auth/identity.ts).
+      return reply.code(400).send({ error: 'Unknown user. Authorize at GET /auth/google.' });
     }
 
     const jobId = randomUUID();
@@ -42,6 +48,20 @@ export async function jobRoutes(
     else void run;
 
     return reply.code(202).send({ jobId, status: 'pending' });
+  });
+
+  app.get('/extractions', async (request, reply) => {
+    const userId = identityFrom(request);
+    if (!userId) return reply.code(401).send({ error: 'Not signed in.' });
+
+    const rows = ctx.db.select().from(extractions)
+      .where(eq(extractions.userId, userId)).all();
+
+    return reply.send({
+      extractions: rows
+        .map((row) => ({ jobId: row.id, status: row.status, createdAt: row.createdAt }))
+        .sort((a, b) => b.createdAt - a.createdAt),
+    });
   });
 
   app.get<{ Params: { jobId: string } }>('/extractions/:jobId', async (request, reply) => {

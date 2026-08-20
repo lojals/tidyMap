@@ -1,5 +1,9 @@
 import 'dotenv/config';
 import Fastify, { type FastifyInstance } from 'fastify';
+import cookie from '@fastify/cookie';
+import fastifyStatic from '@fastify/static';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import type { AppContext } from './context.js';
 import { authRoutes } from './auth/routes.js';
 import { jobRoutes, type JobRouteDeps } from './jobs/routes.js';
@@ -12,6 +16,14 @@ export function buildServer(ctx: AppContext, deps: JobRouteDeps = {}): FastifyIn
   // request logging would write req.url — including ?code=4/0A... — to
   // stdout. Enabling logging later requires redacting that first.
   const app = Fastify({ logger: false });
+
+  app.register(cookie);
+
+  // Resolved from this module rather than process.cwd(): `npm start` runs
+  // dist/server.js and may be launched from any directory. `src/` and `dist/`
+  // are both one level below the repo root, so `..` reaches it either way.
+  const here = dirname(fileURLToPath(import.meta.url));
+  app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/' });
 
   app.register(async (instance) => authRoutes(instance, ctx));
   app.register(async (instance) => jobRoutes(instance, ctx, deps));

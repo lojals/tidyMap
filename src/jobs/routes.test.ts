@@ -4,6 +4,7 @@ import { buildServer } from '../server.js';
 import { createDb, migrate } from '../db/client.js';
 import { users, extractions } from '../db/schema.js';
 import { loadConfig } from '../config.js';
+import { SESSION_COOKIE } from '../auth/identity.js';
 import type { GroupedResult, ResolvedPlace } from '../domain/types.js';
 
 const placesOk = () => new Response(JSON.stringify({
@@ -126,5 +127,97 @@ describe('extraction endpoints', () => {
       method: 'POST', url: '/extractions', payload: { userId: 'ghost' },
     });
     expect(response.statusCode).toBe(400);
+  });
+
+  it('does not echo the identifier back in the unknown-userId 400 body', async () => {
+    // userId now arrives from the HttpOnly tidymap_uid cookie in normal use.
+    // Echoing it into a 400 body would let any same-origin script recover
+    // the cookie's value from an ordinary POST response, defeating the
+    // httpOnly attribute's documented purpose (src/auth/identity.ts). This
+    // covers the realistic path: a stale/forged cookie naming a userId with
+    // no matching users row, not just the body-userId fallback above.
+    const { app } = buildTestServer();
+    const response = await app.inject({
+      method: 'POST', url: '/extractions',
+      cookies: { [SESSION_COOKIE]: 'stale-cookie-value' },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).not.toContain('stale-cookie-value');
+  });
+
+  it('returns 401, not 400, when POST /extractions has no identity at all', async () => {
+    // Missing identity ("not signed in") is a different condition from an
+    // identity that IS present but names no such user (the stale-cookie
+    // test above, which stays 400) -- both routes that read identityFrom
+    // should agree with GET /extractions's 401 for this case.
+    const { app } = buildTestServer();
+    const response = await app.inject({ method: 'POST', url: '/extractions', payload: {} });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('accepts identity from the session cookie with no body userId', async () => {
+    const { app } = buildTestServer();
+    const created = await app.inject({
+      method: 'POST', url: '/extractions',
+      // Computed key: app.inject's `cookies` option needs a literal
+      // property name, and SESSION_COOKIE must stay the single source of
+      // truth for the cookie name so this test can't drift from it.
+      cookies: { [SESSION_COOKIE]: 'u1' },
+      payload: {},
+    });
+    expect(created.statusCode).toBe(202);
+  });
+
+  it('prefers the cookie over a body userId when both are present', async () => {
+    const { app, db } = buildTestServer();
+    db.insert(users).values({ id: 'u2', createdAt: 0 }).run();
+
+    const created = await app.inject({
+      method: 'POST', url: '/extractions',
+      cookies: { [SESSION_COOKIE]: 'u1' },
+      payload: { userId: 'u2' },
+    });
+
+    const { jobId } = created.json<{ jobId: string }>();
+    const row = db.select().from(extractions).where(eq(extractions.id, jobId)).all()[0]!;
+    expect(row.userId).toBe('u1');
+  });
+
+  it('lists the caller extractions newest first', async () => {
+    const { app, db } = buildTestServer();
+    db.insert(extractions).values([
+      { id: 'old', userId: 'u1', status: 'complete', createdAt: 1000, updatedAt: 1000 },
+      { id: 'new', userId: 'u1', status: 'running', createdAt: 2000, updatedAt: 2000 },
+    ]).run();
+
+    const response = await app.inject({
+      method: 'GET', url: '/extractions', cookies: { [SESSION_COOKIE]: 'u1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ extractions: { jobId: string }[] }>().extractions.map((e) => e.jobId))
+      .toEqual(['new', 'old']);
+  });
+
+  it('returns 401 when there is no identity, which the UI reads as signed out', async () => {
+    const { app } = buildTestServer();
+    const response = await app.inject({ method: 'GET', url: '/extractions' });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('never lists another user extractions', async () => {
+    const { app, db } = buildTestServer();
+    db.insert(users).values({ id: 'other', createdAt: 0 }).run();
+    db.insert(extractions).values([
+      { id: 'mine', userId: 'u1', status: 'complete', createdAt: 1, updatedAt: 1 },
+      { id: 'theirs', userId: 'other', status: 'complete', createdAt: 2, updatedAt: 2 },
+    ]).run();
+
+    const response = await app.inject({
+      method: 'GET', url: '/extractions', cookies: { [SESSION_COOKIE]: 'u1' },
+    });
+    expect(response.json<{ extractions: { jobId: string }[] }>().extractions.map((e) => e.jobId))
+      .toEqual(['mine']);
   });
 });

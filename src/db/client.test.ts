@@ -356,6 +356,7 @@ describe('createDb', () => {
       countryCode: 'US',
       category: 'Food & Drink',
       primaryType: 'bakery',
+      types: ['bakery', 'food', 'point_of_interest'],
       lat: 42.35,
       lng: -71.05,
       sourceLists: ['Want to go', 'Starred places'],

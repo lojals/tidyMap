@@ -31,6 +31,77 @@ changes, refresh a stale build with `npm run build` before `npm start`, or
 just use `npm run dev` (`tsx watch`), which always runs current source and
 has no build step to forget.
 
+### If `localhost:3000` doesn't connect
+
+The server binds `127.0.0.1` (IPv4) only. On a system where `localhost`
+resolves to `::1` (IPv6) first, `http://localhost:3000` will fail to
+connect even though the server is running — this happened during Phase 2
+verification on the development machine, where an unrelated process was
+also listening on `localhost:3000` over IPv6.
+
+If that happens, `http://127.0.0.1:3000` reaches the server — **but you
+must then use `127.0.0.1` consistently everywhere**, including changing the
+authorized redirect URI in the Google Cloud console and
+`GOOGLE_REDIRECT_URI` in `.env` to match. Mixing the two hosts silently
+strands the session cookie, because it is host-scoped: you'll appear signed
+out on one host while holding a valid session on the other, and
+re-consenting spends a one-time authorization to no effect. The default
+path (`localhost` everywhere, as used throughout this README) works and is
+what you should use unless you actually hit this.
+
+## Using the web UI
+
+`npm run dev` (or `npm start` against a fresh build) serves the whole app —
+API and UI — on one port. Open <http://localhost:3000/> and click **Connect
+Google**. That sends you through the same `/auth/google` consent flow the
+curl walkthrough below uses; the callback now sets an HttpOnly session
+cookie and redirects you straight back to `/` instead of showing you
+anything to copy. Click **Extract my saved places** and wait — a real run
+takes a few minutes, and the page polls and shows progress while Google
+builds the archive. When it completes, results are grouped by category by
+default, with **Category** / **City** / **Country** tabs to switch the
+grouping; each group carries an emoji next to its name. The page has five
+states (signed out, ready to extract, running, done, failed) and recovers
+its place on reload by asking `GET /extractions` for your most recent job.
+
+The UI is plain static files served from `public/` via `@fastify/static` —
+there is no build step, no bundler, and no framework. `public/app.js` talks
+to the same JSON endpoints documented below; `public/app-state.js` is a pure,
+DOM-free module (view selection, elapsed-time formatting, poll backoff,
+failure messaging) that is unit-tested the same way the server code is.
+
+This does not replace the curl workflows below — both remain fully valid.
+Every endpoint that needs identity (`POST /extractions`, `GET /extractions`,
+`POST /auth/reset`) accepts a `userId` in the request body as a fallback,
+and prefers the session cookie only when both are present
+(`identityFrom` in `src/auth/identity.ts`). Since the cookie is `HttpOnly`,
+scripting against these endpoints with curl still means capturing a
+`userId` by hand — see the note in the end-to-end checklist below.
+
+## Categorization
+
+Every place is mapped to one of ten curated categories (`src/categorize/taxonomy.ts`)
+from its Places `primaryType` first. If `primaryType` has no entry in the
+table, Phase 2 added a rescue: the first mappable entry in the place's
+`types[]` array is used instead — Google often reports a useless primary
+type alongside a perfectly good secondary one (`yak_rental, tourist_attraction`
+resolves to Culture, not Unknown). Only a place that finds no mapping in
+either `primaryType` or `types[]` is counted as a taxonomy gap; see the
+"Which `primaryType` values are taxonomy gaps" note below for how to find
+those.
+
+**Sub-category fallback grouping.** When grouping results by category
+(`GET /extractions/:jobId/results?groupBy=category`, `src/group/index.ts`),
+a place that ended up Unknown gets a second chance at a useful label: if it
+has a `primaryType`, that type is turned into a readable group name of its
+own (`yak_rental` → "Yak Rental") instead of joining one undifferentiated
+`Unknown` pile. This applies per distinct `primaryType`, so different
+unmapped types land in different groups rather than merging. Only a place
+with no `primaryType` at all — nothing to build a readable name from —
+still lands in the literal `Unknown` group. Fallback groups carry a neutral
+📌 marker instead of a category emoji, so they read as distinct from the
+ten curated categories at a glance.
+
 ## Security posture (Phase 1)
 
 The server binds `127.0.0.1` only — it is not reachable from other machines
@@ -103,11 +174,21 @@ after completing [docs/gcp-setup.md](docs/gcp-setup.md) and setting
 has **not** been executed as part of this repository's automated
 verification: it requires a real GCP project, a real Google account, and a
 browser consent round-trip that no automated check can perform. Fixture-mode
-verification (which has been run — see below) exercises the same code path
-end-to-end minus the Portability API itself.
+verification exercises the same code path end-to-end minus the Portability
+API itself, and *has* been run against a real `GOOGLE_PLACES_API_KEY` — see
+"How far the live run actually got" in [docs/HANDOFF.md](docs/HANDOFF.md)
+for what that did and did not cover.
 
-- [ ] 1. Open http://localhost:3000/auth/google and grant consent. The callback
-      returns your `userId`.
+- [ ] 1. Open http://localhost:3000/auth/google and grant consent. As of
+      Task 3, the callback no longer returns your `userId` in the response —
+      it sets an HttpOnly `tidymap_uid` session cookie and redirects you to
+      `/`. If you're driving the UI, that's the whole step: the browser
+      carries the cookie automatically from here on and you never need the
+      raw value. If you want to script the rest with curl instead, the
+      cookie being `HttpOnly` means page JavaScript can't read it either, so
+      pull it from your browser's dev tools (Application/Storage → Cookies →
+      `tidymap_uid`, or the `Set-Cookie` header on the callback response in
+      the Network tab) and use it as `YOUR_USER_ID` below.
 
 - [ ] 2. Start an extraction:
 
@@ -116,6 +197,11 @@ end-to-end minus the Portability API itself.
         -H 'content-type: application/json' \
         -d '{"userId":"YOUR_USER_ID"}'
       ```
+
+      (Endpoints that need identity accept this body `userId` as a fallback
+      to the session cookie — see "Using the web UI" above — so this curl
+      workflow keeps working exactly as before; only how you obtain
+      `YOUR_USER_ID` in step 1 has changed.)
 
 - [ ] 3. Poll until `status` is `complete` — the archive typically takes a few minutes:
 
@@ -143,12 +229,19 @@ in the commit or PR that records the live run:
   `unresolvedCount` in any of the three results responses (both fields are
   present regardless of `groupBy`). An item with `"resolved": false` still
   appears in the output; it is never silently dropped.
-- **Which `primaryType` values landed in `Unknown`** — group by `category`,
-  look at the `Unknown` bucket, and read each place's `primaryType` field.
-  Each one is a gap in the taxonomy table (`src/categorize/taxonomy.ts`)
-  worth filling. `GET /extractions/JOB_ID` also reports these directly, in
-  its nullable `warnings` field, alongside any export file that could not be
-  parsed — no need to hunt through the grouped results by hand.
+- **Which `primaryType` values are taxonomy gaps** — do **not** find these by
+  grouping on `category` and reading the `Unknown` bucket; Phase 2 made that
+  bucket the wrong place to look. An unmapped `primaryType` with a rescuable
+  secondary type resolves to a real category (the `types[]` rescue — see
+  "Categorization" above), and an unmapped `primaryType` with *no* rescuable
+  secondary type now gets its own readable-type group instead of landing in
+  `Unknown` ("Sub-category fallback grouping", also above). Only a place
+  with no `primaryType` at all still reaches
+  the literal `Unknown` bucket. Read `GET /extractions/JOB_ID`'s nullable
+  `warnings` field instead — it reports every `primaryType` that reached
+  neither a direct match nor a secondary-type rescue (alongside any export
+  file that could not be parsed), which is the actual gap list. Each name in
+  there is worth adding to the taxonomy table (`src/categorize/taxonomy.ts`).
 - **Whether saved-collection items without coordinates resolved to the right
   city** — saved-collection rows carry no lat/lng (only starred places do;
   see `src/parse/saved-collections.ts` vs `src/parse/starred-places.ts`), so
@@ -187,8 +280,11 @@ curl -X POST http://localhost:3000/auth/reset \
 Then re-authorize at `/auth/google` — the reset invalidates the existing
 tokens, so consent must be repeated. Re-authorizing mints a **new** `userId`
 (see "Cost of anonymity" above) — the old one still exists as a `users` row,
-but it has no valid tokens and cannot be used for another extraction. Use the
-new `userId` the callback returns, not the one you reset.
+but it has no valid tokens and cannot be used for another extraction. The
+callback sets the new `userId` as the session cookie (see "Using the web
+UI" above), so the browser picks it up automatically; for curl, pull the new
+value from dev tools the same way as in step 1 of the end-to-end checklist
+— don't reuse the one you just reset.
 
 **Warning:** Google returns `RESOURCE_EXHAUSTED` for both a spent one-time
 authorization *and* ordinary rate limiting — the two cases are
@@ -230,7 +326,9 @@ still be usable.
 > track of which `userId` that was — or its tokens are already invalid — the app
 > cannot reset the authorization for you, and consent will keep failing with the
 > incremental-auth error. The Google-side revoke is the only guaranteed escape.
-> Note the `userId` the callback returns before starting an extraction.
+> The callback no longer prints the `userId` for you to note down — it's only
+> in the session cookie now — so if you're relying on the in-app reset path,
+> capture it from dev tools (see step 1 above) before starting an extraction.
 
 [tsg]: https://developers.google.com/data-portability/user-guide/troubleshooting
 
