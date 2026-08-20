@@ -1,40 +1,238 @@
-:root { --fg: #1a1a1a; --muted: #666; --line: #e2e2e2; --bg: #fff; }
+/* TidyMap — "Quiet": warm paper, near-black ink, no accent colour.
+   Emphasis comes from weight and contrast, not hue. Groups are separated
+   by hairline rules, never boxes. */
+
+:root {
+  --paper: #fbfbfa;
+  --ink: #1c1c1a;
+  --muted: #8a877f;
+  --faint: #a3a099;
+  --rule: #e8e6e1;
+  --rail: #eeece7;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
 * { box-sizing: border-box; }
+
+html { font-size: 16px; }
+
 body {
-  margin: 0 auto; padding: 2rem 1.25rem; max-width: 46rem;
-  font: 16px/1.55 system-ui, -apple-system, sans-serif;
-  color: var(--fg); background: var(--bg);
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 0.9375rem/1.6 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
-h1 { font-size: 1.4rem; margin: 0 0 1.5rem; }
-h2 { font-size: 1.1rem; }
-.note { color: var(--muted); font-size: 0.9rem; }
+
+header,
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding-left: clamp(1.25rem, 4vw, 2.5rem);
+  padding-right: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+header {
+  padding-top: 2.5rem;
+  padding-bottom: 1.25rem;
+  margin-bottom: 2.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+main { padding-bottom: 4rem; }
+
+h2 {
+  margin: 0 0 1.5rem;
+  font-size: 1.625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+p { margin: 0 0 1rem; }
+p:last-child { margin-bottom: 0; }
+
+a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+  text-underline-offset: 0.15em;
+}
+a:hover { text-decoration-color: var(--muted); }
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
 .button {
-  display: inline-block; padding: 0.6rem 1rem; border: 1px solid var(--fg);
-  border-radius: 6px; background: var(--fg); color: #fff;
-  font: inherit; cursor: pointer; text-decoration: none;
+  display: inline-block;
+  margin: 0.5rem 0 0;
+  padding: 0.75rem 1.375rem;
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: filter 0.15s ease;
 }
-.button:disabled { opacity: 0.5; cursor: default; }
-.controls { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+.button:hover { filter: brightness(1.2); }
+.button:disabled { opacity: 0.45; cursor: default; filter: none; }
+
+/* Signed-out / ready / running — same palette and rhythm as everywhere else */
+
+#view-running .note { margin-top: 0.5rem; }
+
+#elapsed {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.rerun {
+  border-top: 1px solid var(--rule);
+  margin-top: 2.5rem;
+  padding-top: 1.75rem;
+}
+.rerun .note:not(:last-child) { margin-bottom: 1rem; }
+.rerun .button { margin-top: 0.25rem; }
+
+/* Group-by tabs */
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin-bottom: 2rem;
+}
+
+.controls span {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+  margin-right: 0.25rem;
+}
+
 .tab {
-  padding: 0.35rem 0.7rem; border: 1px solid var(--line); border-radius: 999px;
-  background: none; font: inherit; cursor: pointer;
+  padding: 0.4rem 0.95rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
-.tab[aria-selected="true"] { border-color: var(--fg); font-weight: 600; }
-.group { border-top: 1px solid var(--line); padding: 1rem 0; }
-.group h3 { margin: 0 0 0.5rem; font-size: 1rem; }
-.group .count { color: var(--muted); font-weight: 400; }
-.place { padding: 0.35rem 0; }
-.place .addr { color: var(--muted); font-size: 0.85rem; }
-.place .note-text { font-size: 0.85rem; font-style: italic; }
-.rerun { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
-.rerun .note { margin-top: 0; }
+.tab:hover { border-color: var(--muted); }
+.tab[aria-selected="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+  font-weight: 500;
+}
+
+/* Results — the payoff screen */
+
+#summary { margin-bottom: 1.75rem; }
+
 .warnings {
-  position: relative; border: 1px solid var(--line); border-radius: 6px;
-  padding: 0.75rem 2rem 0.75rem 0.75rem; margin-bottom: 1rem; font-size: 0.9rem;
+  position: relative;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  padding: 1rem 2.25rem 1rem 0;
+  margin-bottom: 2rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
 }
+
 .dismiss {
-  position: absolute; top: 0.35rem; right: 0.5rem;
-  border: none; background: none; font-size: 1.2rem; line-height: 1;
-  cursor: pointer; color: var(--muted);
+  position: absolute;
+  top: 0.85rem;
+  right: 0;
+  border: none;
+  background: none;
+  padding: 0.25rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--faint);
+  cursor: pointer;
 }
-pre { white-space: pre-wrap; background: #f6f6f6; padding: 0.75rem; border-radius: 6px; }
+.dismiss:hover { color: var(--ink); }
+
+#groups { margin-bottom: 1rem; }
+
+.group {
+  border-top: 1px solid var(--rule);
+  padding: 2.25rem 0;
+}
+.group:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.group h3 {
+  margin: 0 0 1.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.group .count {
+  color: var(--faint);
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  font-size: 0.8125rem;
+}
+
+.place { padding: 0.6rem 0; }
+
+.place > div:first-child {
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.place .addr,
+.place .note-text {
+  margin-top: 0.2rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.place .note-text { font-style: italic; }
+
+/* Failure */
+
+#failure {
+  white-space: pre-wrap;
+  margin: 0 0 1.5rem;
+  padding: 1rem 1.25rem;
+  border-radius: 6px;
+  background: var(--rail);
+  color: var(--ink);
+  font: 0.8125rem/1.6 var(--font-sans);
+}
