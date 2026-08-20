@@ -102,4 +102,24 @@ describe('static UI', () => {
       process.chdir(cwd);
     }
   });
+
+  it('tells a returning user how to clear a stale Google authorization', async () => {
+    // This hint cannot be conditional. When Google rejects a re-consent with
+    // "Incremental auth is not allowed for the requested scopes" it renders
+    // its own error page and the browser never returns here, so no client
+    // code of ours ever runs. The escape route has to be on the page before
+    // the user clicks, or they are simply stuck.
+    const { app } = buildTestServer();
+    const response = await app.inject({ method: 'GET', url: '/' });
+
+    // Scoped to the signed-out section on purpose: the permissions link also
+    // appears in the done and failed views, so asserting against the whole
+    // document would pass without this hint existing at all.
+    const signedOut = response.body
+      .split('id="view-signed-out"')[1]!
+      .split('</section>')[0]!;
+
+    expect(signedOut).toContain('myaccount.google.com/permissions');
+    expect(signedOut).toContain('Incremental auth is not allowed');
+  });
 });

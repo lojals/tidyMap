@@ -16,6 +16,31 @@
       <p class="note" id="connection-note" hidden>
         Couldn't reach the server just now. Reload to try again.
       </p>
+
+      <!--
+        Always visible, never conditional. When Google rejects a re-consent it
+        renders its own error page and the browser never comes back here, so no
+        client code of ours can detect it and reveal this after the fact. It has
+        to be readable before the user clicks, or they hit a dead end: this app
+        cannot clear the grant for them either, because doing so needs stored
+        tokens and a session it does not have while signed out.
+      -->
+      <div class="rerun">
+        <p class="note">
+          <strong>Connected once already?</strong> If Google answers with
+          <em>&ldquo;Incremental auth is not allowed for the requested
+          scopes&rdquo;</em>, your previous authorization is still on your
+          account. Google only grants these scopes once, so it refuses to
+          re-grant what you already hold.
+        </p>
+        <p class="note">
+          Clear it at
+          <a href="https://myaccount.google.com/permissions" target="_blank"
+             rel="noopener">myaccount.google.com/permissions</a> &mdash; find
+          this app, choose <strong>Remove access</strong> &mdash; then come back
+          and connect again.
+        </p>
+      </div>
     </section>
 
     <section id="view-ready" hidden>
