@@ -34,6 +34,12 @@ export interface ResolvedPlace {
   countryCode: string | null;
   category: Category;
   primaryType: string | null;
+  /**
+   * Raw Places `types[]`. May be absent on places persisted before Phase 2 --
+   * `places.payload` is a JSON column, so old rows were never migrated. Treat
+   * it as possibly undefined when reading stored payloads.
+   */
+  types: string[];
   lat: number | null;
   lng: number | null;
   sourceLists: string[];

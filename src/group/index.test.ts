@@ -6,7 +6,7 @@ function place(over: Partial<ResolvedPlace>): ResolvedPlace {
   return {
     placeId: 'ChIJtest', name: 'Test', address: null,
     city: 'Barcelona', country: 'Spain', countryCode: 'ES',
-    category: 'Food & Drink', primaryType: 'cafe',
+    category: 'Food & Drink', primaryType: 'cafe', types: ['cafe'],
     lat: null, lng: null, sourceLists: ['Want to go'],
     mapsUrl: null, note: null, resolved: true,
     ...over,

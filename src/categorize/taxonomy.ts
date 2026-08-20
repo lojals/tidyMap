@@ -73,19 +73,44 @@ const TYPE_TO_CATEGORY: Record<string, Category> = {
 
 const unmapped = new Map<string, number>();
 
-/**
- * Maps a Places API `primaryType` to one of the ten TidyMap categories.
- * Unmapped types are counted so gaps in the table surface from real data.
- */
-export function categorize(primaryType: string | null | undefined): Category {
-  if (!primaryType) return 'Unknown';
+/** One lookup attempt against the table, including the *_restaurant suffix rule. */
+function lookup(type: string | null | undefined): Category | undefined {
+  if (!type) return undefined;
 
-  const direct = TYPE_TO_CATEGORY[primaryType];
+  const direct = TYPE_TO_CATEGORY[type];
   if (direct) return direct;
 
-  if (primaryType.endsWith('_restaurant')) return 'Food & Drink';
+  if (type.endsWith('_restaurant')) return 'Food & Drink';
 
-  unmapped.set(primaryType, (unmapped.get(primaryType) ?? 0) + 1);
+  return undefined;
+}
+
+/**
+ * Maps a place to one of the ten TidyMap categories.
+ *
+ * `primaryType` wins. Failing that, the first mappable entry in `types[]`
+ * rescues the place -- Google often reports a useless primary type alongside a
+ * perfectly good secondary one (`yak_rental, tourist_attraction`).
+ *
+ * Only a place that ends up Unknown is counted as a taxonomy gap, and it is
+ * counted under its `primaryType`. A rescued place is not a gap: it got a real
+ * category, and listing it would make the warnings report unactionable.
+ */
+export function categorize(
+  primaryType: string | null | undefined,
+  types?: readonly string[] | null,
+): Category {
+  const direct = lookup(primaryType);
+  if (direct) return direct;
+
+  for (const type of types ?? []) {
+    const rescued = lookup(type);
+    if (rescued) return rescued;
+  }
+
+  if (primaryType) {
+    unmapped.set(primaryType, (unmapped.get(primaryType) ?? 0) + 1);
+  }
   return 'Unknown';
 }
 

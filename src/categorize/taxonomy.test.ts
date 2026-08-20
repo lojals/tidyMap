@@ -40,4 +40,44 @@ describe('categorize', () => {
     categorize(null);
     expect(unmappedTypeCounts().size).toBe(0);
   });
+
+  it('rescues an unmapped primaryType using a mappable secondary type', () => {
+    expect(categorize('yak_rental', ['yak_rental', 'tourist_attraction', 'point_of_interest']))
+      .toBe('Culture');
+  });
+
+  it('prefers primaryType over any secondary type', () => {
+    expect(categorize('cafe', ['cafe', 'tourist_attraction'])).toBe('Food & Drink');
+  });
+
+  it('uses the FIRST mappable secondary type, not the last', () => {
+    expect(categorize('yak_rental', ['museum', 'park'])).toBe('Culture');
+  });
+
+  it('returns Unknown when neither primaryType nor any secondary type maps', () => {
+    expect(categorize('yak_rental', ['yak_rental', 'point_of_interest'])).toBe('Unknown');
+  });
+
+  it('applies the *_restaurant suffix rule to secondary types too', () => {
+    expect(categorize('yak_rental', ['sushi_restaurant'])).toBe('Food & Drink');
+  });
+
+  it('counts the primaryType, not a rescued secondary type', () => {
+    resetUnmappedCounts();
+    categorize('yak_rental', ['tourist_attraction']);
+    // Rescued: the place got a real category, so it is not a taxonomy gap.
+    expect(unmappedTypeCounts().size).toBe(0);
+  });
+
+  it('counts the primaryType when nothing rescues it', () => {
+    resetUnmappedCounts();
+    categorize('yak_rental', ['point_of_interest']);
+    expect([...unmappedTypeCounts().keys()]).toEqual(['yak_rental']);
+  });
+
+  it('tolerates a missing types argument (old persisted payloads)', () => {
+    expect(categorize('cafe')).toBe('Food & Drink');
+    expect(categorize('yak_rental')).toBe('Unknown');
+    expect(categorize(null)).toBe('Unknown');
+  });
 });
