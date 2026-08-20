@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import os from 'node:os';
 import { buildServer } from './server.js';
 import { createDb, migrate } from './db/client.js';
 import { users } from './db/schema.js';
@@ -75,5 +76,30 @@ describe('buildServer error handler', () => {
     expect(response.body).not.toContain('internal detail');
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+});
+
+// @fastify/static could be dropped from buildServer entirely and every other
+// test in this suite would still pass -- the 401 tests elsewhere only prove
+// static isn't shadowing the API (the negative case). This is the positive
+// case: something actually serves the UI from '/'.
+describe('static UI', () => {
+  it('serves the UI from a root resolved off the module, not the cwd', async () => {
+    // The chdir is what makes this load-bearing. server.ts resolves its
+    // static root from import.meta.url specifically because `npm start`
+    // launches dist/server.js from an arbitrary working directory -- without
+    // the chdir here, this test would still pass under a regression back to
+    // join(process.cwd(), 'public'), since vitest's cwd happens to be the
+    // repo root already.
+    const cwd = process.cwd();
+    process.chdir(os.tmpdir());
+    try {
+      const { app } = buildTestServer();
+      const response = await app.inject({ method: 'GET', url: '/' });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain('id="view-signed-out"');
+    } finally {
+      process.chdir(cwd);
+    }
   });
 });
