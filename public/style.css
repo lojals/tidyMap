@@ -98,14 +98,76 @@ a:hover { text-decoration-color: var(--muted); }
 .button:hover { filter: brightness(1.2); }
 .button:disabled { opacity: 0.45; cursor: default; filter: none; }
 
-/* Signed-out / ready / running — same palette and rhythm as everywhere else */
+/* Signed-out / ready — same palette and rhythm as everywhere else */
 
-#view-running .note { margin-top: 0.5rem; }
+/* Running — full-screen single focus. One stage at a time, large and
+   centred, filling the viewport; no accent colour, no spinner implying
+   progress that isn't real. */
 
-#elapsed {
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
+#view-running:not([hidden]) {
+  display: flex;
 }
+
+.running {
+  width: 100%;
+  min-height: calc(100vh - 16rem);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.running-step {
+  margin: 0 0 1rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+}
+
+.running-label {
+  margin: 0 0 0.75rem;
+  font-size: 1.625rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.running-sublabel {
+  max-width: 34ch;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 0;
+  margin-bottom: 2rem;
+}
+
+.rail {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 1.25rem;
+}
+
+.rail-segment {
+  width: 26px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--rail);
+}
+.rail-segment.filled { background: var(--ink); }
+.rail-segment.current { opacity: 0.45; }
+
+.running-elapsed {
+  margin: 0;
+  font-size: 0.6875rem;
+  color: var(--faint);
+}
+
+#elapsed { font-variant-numeric: tabular-nums; }
+
+.running-reconnect { margin-top: 1.5rem; }
 
 .rerun {
   border-top: 1px solid var(--rule);

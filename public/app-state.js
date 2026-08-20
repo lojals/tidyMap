@@ -78,6 +78,49 @@ export function escapeHtml(value) {
   }[character]));
 }
 
+const STAGES = [
+  { key: 'requesting', label: 'Asking Google for your places', sublabel: 'Sending the export request.' },
+  { key: 'preparing', label: 'Google is preparing your export', sublabel: 'This usually takes two to five minutes. Nothing to do but wait.' },
+  { key: 'downloading', label: 'Downloading your export', sublabel: 'Collecting the archive Google just built.' },
+  { key: 'reading', label: 'Reading your saved lists', sublabel: 'Pulling the places out of the export.' },
+  { key: 'resolving', label: 'Looking up your places', sublabel: 'Matching each pin to a real place and giving it a category.' },
+  { key: 'organizing', label: 'Putting your list together', sublabel: 'Saving everything and noting anything that needs a look.' },
+];
+
+/**
+ * Maps a pipeline `stage` (and, for `resolving`, its `stageDetail`) to what
+ * the full-screen running view renders. Pure and exhaustively tested
+ * because app.js has no tests by design -- see its header comment.
+ *
+ * `stage` is `null`/`undefined` for a run that has started but not yet
+ * recorded its first stage -- a real state, not "unknown". An unrecognized
+ * stage string is server/client skew -- a bug signal, not a future stage
+ * worth guessing at. Neither case may crash or print "undefined" on screen.
+ * @param {string|null|undefined} stage
+ * @param {string|null|undefined} stageDetail
+ * @returns {{ label: string, sublabel: string, index: number|null }}
+ */
+export function describeStage(stage, stageDetail) {
+  if (stage === null || stage === undefined) {
+    return { label: 'Getting started', sublabel: 'Setting up your run.', index: 0 };
+  }
+
+  const index = STAGES.findIndex((entry) => entry.key === stage);
+  if (index === -1) {
+    return { label: 'Working…', sublabel: '', index: null };
+  }
+
+  const { label, sublabel } = STAGES[index];
+  // Only `resolving` ever carries a stageDetail (see setResolvingProgress in
+  // src/jobs/pipeline.ts); every other stage, and resolving before its first
+  // progress tick, must render the plain sublabel with no dangling dash.
+  const rendered = stage === 'resolving' && stageDetail
+    ? `${sublabel.replace(/\.$/, '')} — ${stageDetail} so far.`
+    : sublabel;
+
+  return { label, sublabel: rendered, index };
+}
+
 /**
  * How to present a failed extraction.
  *

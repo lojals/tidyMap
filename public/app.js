@@ -1,5 +1,5 @@
 import {
-  resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState, escapeHtml,
+  resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState, escapeHtml, describeStage,
 } from './app-state.js';
 
 const VIEWS = ['signed-out', 'ready', 'running', 'done', 'failed'];
@@ -13,6 +13,32 @@ function show(view) {
   for (const name of VIEWS) {
     document.getElementById(`view-${name}`).hidden = name !== view;
   }
+}
+
+/**
+ * Renders the full-screen single-focus stage: label, sublabel, "STEP n OF 6"
+ * (hidden when index is null -- an unrecognized stage, a bug signal, not a
+ * position in the sequence), and the six-segment rail. The rail fills every
+ * segment up to and including the current index in one paint, including on
+ * a fixture-mode run that jumps straight to `reading` -- a rail with holes
+ * would read as broken, and there is no sub-progress to animate through.
+ */
+function renderStage(stage, stageDetail) {
+  const { label, sublabel, index } = describeStage(stage, stageDetail);
+
+  document.getElementById('running-label').textContent = label;
+  document.getElementById('running-status').textContent = sublabel;
+
+  const step = document.getElementById('running-step');
+  step.hidden = index === null;
+  step.textContent = index === null ? '' : `Step ${index + 1} of 6`;
+
+  const segments = document.querySelectorAll('#running-rail .rail-segment');
+  segments.forEach((segment, i) => {
+    const filled = index !== null && i <= index;
+    segment.classList.toggle('filled', filled);
+    segment.classList.toggle('current', filled && i === index);
+  });
 }
 
 async function getJson(url) {
@@ -38,6 +64,10 @@ async function loadInitialState() {
       // the user to wait out a second full timeout on a job already minutes in.
       startedAt = newest.createdAt;
       show('running');
+      // Paint a real first-run state immediately rather than leaving the
+      // labels blank until the first poll response lands -- poll() below
+      // corrects this to the job's actual stage within one round trip.
+      renderStage(undefined, undefined);
       poll();
       return;
     }
@@ -71,6 +101,7 @@ async function start() {
     currentJobId = (await response.json()).jobId;
     startedAt = Date.now();
     show('running');
+    renderStage(undefined, undefined);
     poll();
   } finally {
     // Otherwise a rejected fetch (network blip) leaves the button disabled
@@ -83,18 +114,28 @@ async function poll() {
   const elapsed = Date.now() - startedAt;
   document.getElementById('elapsed').textContent = formatElapsed(elapsed);
 
-  let state;
+  let status;
   try {
-    const status = await getJson(`/extractions/${currentJobId}`);
-    state = status.body?.status;
+    status = await getJson(`/extractions/${currentJobId}`);
   } catch {
     // Network blip, server restart, laptop asleep. Keep polling rather than
     // stranding the page on "running" with no way back but a manual reload.
-    state = undefined;
+    status = undefined;
   }
 
-  document.getElementById('running-status').textContent =
-    state ? `Status: ${state}` : 'Reconnecting…';
+  // Only repaint the stage when the fetch actually succeeded (2xx with a
+  // body). A transient failure -- network blip or a non-ok response, body
+  // null either way -- must leave the last-rendered stage on screen: calling
+  // describeStage(undefined) here would flip a correct "Google is preparing
+  // your export" back to "Getting started" on every hiccup. Surface the
+  // reconnecting note instead, without touching the stage labels.
+  const reconnecting = !status?.ok;
+  document.getElementById('reconnecting-note').hidden = !reconnecting;
+  if (!reconnecting) {
+    renderStage(status.body.stage, status.body.stageDetail);
+  }
+
+  const state = status?.ok ? status.body.status : undefined;
 
   if (terminalState(state) === 'complete') { await renderResults(); return; }
   if (terminalState(state) === 'failed') { await renderFailure(); return; }
