@@ -1,4 +1,4 @@
-import { resolveView, formatElapsed, pollDelayMs, describeFailure } from './app-state.js';
+import { resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState } from './app-state.js';
 
 const VIEWS = ['signed-out', 'ready', 'running', 'done', 'failed'];
 
@@ -63,12 +63,21 @@ async function poll() {
   const elapsed = Date.now() - startedAt;
   document.getElementById('elapsed').textContent = formatElapsed(elapsed);
 
-  const status = await getJson(`/extractions/${currentJobId}`);
-  const state = status.body?.status;
-  document.getElementById('running-status').textContent = state ? `Status: ${state}` : '';
+  let state;
+  try {
+    const status = await getJson(`/extractions/${currentJobId}`);
+    state = status.body?.status;
+  } catch {
+    // Network blip, server restart, laptop asleep. Keep polling rather than
+    // stranding the page on "running" with no way back but a manual reload.
+    state = undefined;
+  }
 
-  if (state === 'complete') { await renderResults(); return; }
-  if (state === 'failed' || state === 'timed_out') { await renderFailure(); return; }
+  document.getElementById('running-status').textContent =
+    state ? `Status: ${state}` : 'Reconnecting…';
+
+  if (terminalState(state) === 'complete') { await renderResults(); return; }
+  if (terminalState(state) === 'failed') { await renderFailure(); return; }
 
   pollTimer = setTimeout(poll, pollDelayMs(elapsed));
 }
@@ -99,7 +108,17 @@ async function renderResults() {
 
   const status = await getJson(`/extractions/${currentJobId}`);
   const results = await getJson(`/extractions/${currentJobId}/results?groupBy=${groupBy}`);
-  if (!results.ok) { show('failed'); return; }
+  if (!results.ok) {
+    // The job itself did not fail -- the results fetch did. Report that
+    // distinctly rather than falling through to renderFailure(), which
+    // would report the job's (empty) error and leave the view blank.
+    document.getElementById('failure').textContent =
+      `The extraction finished, but its results could not be loaded (HTTP ${results.status}).`;
+    document.getElementById('failure-help').innerHTML =
+      '<p class="note">The places are still stored. Reloading the page will retry.</p>';
+    show('failed');
+    return;
+  }
 
   const { totalPlaces, unresolvedCount, results: groups } = results.body;
   document.getElementById('summary').textContent =

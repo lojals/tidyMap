@@ -40,6 +40,19 @@ export function pollDelayMs(elapsedMs) {
 }
 
 /**
+ * Whether a job status means the pipeline has stopped, and how it ended.
+ * Lives here rather than in app.js because which statuses are terminal is a
+ * business decision, and app.js has no tests by design.
+ * @param {string|undefined} status
+ * @returns {'complete'|'failed'|'pending'}
+ */
+export function terminalState(status) {
+  if (status === 'complete') return 'complete';
+  if (status === 'failed' || status === 'timed_out') return 'failed';
+  return 'pending';
+}
+
+/**
  * How to present a failed extraction.
  *
  * RESOURCE_EXHAUSTED is deliberately NOT treated as "go reset". Google returns

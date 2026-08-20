@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveView, formatElapsed, pollDelayMs, describeFailure } from './app-state.js';
+import { resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState } from './app-state.js';
 
 describe('resolveView', () => {
   it('is signed-out when the listing was unauthorized', () => {
@@ -76,5 +76,34 @@ describe('describeFailure', () => {
 
   it('tolerates a null error', () => {
     expect(describeFailure(null).message.length).toBeGreaterThan(0);
+  });
+});
+
+describe('terminalState', () => {
+  it('is complete for a complete status', () => {
+    expect(terminalState('complete')).toBe('complete');
+  });
+
+  it('is failed for an explicit failed status', () => {
+    expect(terminalState('failed')).toBe('failed');
+  });
+
+  it('is failed for a timed_out status', () => {
+    // Asserted separately from 'failed' -- a fix that only maps one of the
+    // two terminal-failure statuses would still pass a test that checked
+    // just the other.
+    expect(terminalState('timed_out')).toBe('failed');
+  });
+
+  it('is pending for a running status', () => {
+    expect(terminalState('running')).toBe('pending');
+  });
+
+  it('is pending for a pending status', () => {
+    expect(terminalState('pending')).toBe('pending');
+  });
+
+  it('is pending for an undefined status, e.g. a poll that could not reach the server', () => {
+    expect(terminalState(undefined)).toBe('pending');
   });
 });
