@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState, escapeHtml, describeStage,
+  shouldRepaintStage,
 } from './app-state.js';
 
 describe('resolveView', () => {
@@ -217,5 +218,39 @@ describe('describeStage', () => {
     expect(result).toEqual({ label: 'Working…', sublabel: '', index: null });
     expect(result.label).not.toContain('undefined');
     expect(result.sublabel).not.toContain('undefined');
+  });
+});
+
+describe('shouldRepaintStage', () => {
+  it('repaints while the run is still going', () => {
+    expect(shouldRepaintStage({ ok: true, body: { status: 'running' } })).toBe(true);
+    expect(shouldRepaintStage({ ok: true, body: { status: 'pending' } })).toBe(true);
+  });
+
+  // The regression this function was extracted for. setStatus nulls stage on
+  // every terminal status, so repainting on the poll that discovers one
+  // rewinds the screen from "Putting your list together / Step 6 of 6" to
+  // "Getting started / Step 1 of 6" and holds it there for the length of the
+  // results fetch -- exactly when the finished list should be appearing. All
+  // three terminal statuses are asserted as one array because a fix that
+  // special-cased only 'complete' would leave the same rewind on both
+  // failure paths.
+  it('does not repaint on any terminal status, whose stage the server has nulled', () => {
+    const statuses = ['complete', 'failed', 'timed_out'];
+    expect(statuses.map((status) => shouldRepaintStage({ ok: true, body: { status } })))
+      .toEqual([false, false, false]);
+  });
+
+  it('does not repaint when the status fetch failed, so a blip keeps the last stage', () => {
+    // Both shapes poll() can produce: a thrown fetch (undefined), and a
+    // non-ok response, which getJson returns as {ok:false, body:null} rather
+    // than throwing. A guard written only against `undefined` would sail past
+    // the second and repaint a stage read off a null body.
+    expect(shouldRepaintStage(undefined)).toBe(false);
+    expect(shouldRepaintStage({ ok: false, body: null })).toBe(false);
+  });
+
+  it('does not repaint for an unrecognized status, matching terminalState', () => {
+    expect(shouldRepaintStage({ ok: true, body: { status: 'some-future-status' } })).toBe(false);
   });
 });

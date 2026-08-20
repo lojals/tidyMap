@@ -1,5 +1,6 @@
 import {
   resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState, escapeHtml, describeStage,
+  shouldRepaintStage,
 } from './app-state.js';
 
 const VIEWS = ['signed-out', 'ready', 'running', 'done', 'failed'];
@@ -131,11 +132,15 @@ async function poll() {
   // reconnecting note instead, without touching the stage labels.
   const reconnecting = !status?.ok;
   document.getElementById('reconnecting-note').hidden = !reconnecting;
-  if (!reconnecting) {
-    renderStage(status.body.stage, status.body.stageDetail);
-  }
 
   const state = status?.ok ? status.body.status : undefined;
+
+  // Both reasons a repaint would be wrong here -- a failed fetch, and a
+  // terminal status whose stage the server has already nulled -- live in
+  // shouldRepaintStage, where they are tested.
+  if (shouldRepaintStage(status)) {
+    renderStage(status.body.stage, status.body.stageDetail);
+  }
 
   if (terminalState(state) === 'complete') { await renderResults(); return; }
   if (terminalState(state) === 'failed') { await renderFailure(); return; }

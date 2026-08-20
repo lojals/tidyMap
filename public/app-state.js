@@ -67,6 +67,33 @@ export function terminalState(status) {
 }
 
 /**
+ * Whether a poll result should repaint the full-screen stage display.
+ *
+ * Two distinct ways a repaint is wrong, and both have bitten:
+ *
+ * A *failed fetch* (thrown, or a non-ok response -- getJson returns
+ * `{ok:false, body:null}` for the latter rather than throwing) carries no
+ * stage at all. Repainting would flip a correct "Google is preparing your
+ * export" back to "Getting started" on every network hiccup.
+ *
+ * A *terminal status* carries `stage: null` deliberately -- setStatus in
+ * src/jobs/pipeline.ts nulls stage and stageDetail for every status in
+ * TERMINAL_STATUSES. So the very poll that discovers 'complete' would rewind
+ * the screen from "Putting your list together / Step 6 of 6" to "Getting
+ * started / Step 1 of 6" and hold there for the length of the results fetch
+ * -- precisely when the finished list should be appearing.
+ *
+ * Lives here rather than in app.js for the same reason terminalState does:
+ * it is a business decision, and app.js has no tests by design.
+ * @param {{ ok: boolean, body: { status?: string }|null }|undefined} status
+ * @returns {boolean}
+ */
+export function shouldRepaintStage(status) {
+  if (!status?.ok) return false;
+  return terminalState(status.body?.status) === 'pending';
+}
+
+/**
  * Place names, addresses and notes are user data that arrived from Google --
  * never trust them as markup. Lives here, not app.js, because app.js has no
  * tests by design and this is the highest-consequence logic in the client.
