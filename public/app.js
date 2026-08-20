@@ -1,4 +1,6 @@
-import { resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState } from './app-state.js';
+import {
+  resolveView, formatElapsed, pollDelayMs, describeFailure, terminalState, escapeHtml,
+} from './app-state.js';
 
 const VIEWS = ['signed-out', 'ready', 'running', 'done', 'failed'];
 
@@ -19,44 +21,62 @@ async function getJson(url) {
 }
 
 async function loadInitialState() {
-  const listing = await getJson('/extractions');
-  const view = resolveView({
-    authorized: listing.ok,
-    extractions: listing.body?.extractions ?? [],
-  });
+  try {
+    const listing = await getJson('/extractions');
+    const view = resolveView({
+      authorized: listing.ok,
+      extractions: listing.body?.extractions ?? [],
+    });
 
-  const newest = listing.body?.extractions?.[0];
-  if (newest) currentJobId = newest.jobId;
+    const newest = listing.body?.extractions?.[0];
+    if (newest) currentJobId = newest.jobId;
 
-  if (view === 'running') {
-    startedAt = Date.now();
-    show('running');
-    poll();
-    return;
+    if (view === 'running') {
+      // Resume the actual elapsed time, not a fresh clock. GET /extractions
+      // already returned createdAt for this job -- restarting from Date.now()
+      // would report 0s on reload and restart the fast-poll window, inviting
+      // the user to wait out a second full timeout on a job already minutes in.
+      startedAt = newest.createdAt;
+      show('running');
+      poll();
+      return;
+    }
+    if (view === 'done') { await renderResults(); return; }
+    if (view === 'failed') { await renderFailure(); return; }
+    show(view);
+  } catch {
+    // Every <section> ships `hidden`, so a rejected fetch here (server not
+    // up yet, network blip) with nothing else calling show() would leave a
+    // bare header over an empty page -- no error, no retry. Fall through to
+    // a usable, reloadable state instead of leaving the page blank.
+    document.getElementById('connection-note').hidden = false;
+    show('signed-out');
   }
-  if (view === 'done') { await renderResults(); return; }
-  if (view === 'failed') { await renderFailure(); return; }
-  show(view);
 }
 
 async function start() {
   const button = document.getElementById('start');
   button.disabled = true;
 
-  const response = await fetch('/extractions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    credentials: 'same-origin',
-    body: '{}',
-  });
+  try {
+    const response = await fetch('/extractions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: '{}',
+    });
 
-  button.disabled = false;
-  if (!response.ok) { show('signed-out'); return; }
+    if (!response.ok) { show('signed-out'); return; }
 
-  currentJobId = (await response.json()).jobId;
-  startedAt = Date.now();
-  show('running');
-  poll();
+    currentJobId = (await response.json()).jobId;
+    startedAt = Date.now();
+    show('running');
+    poll();
+  } finally {
+    // Otherwise a rejected fetch (network blip) leaves the button disabled
+    // forever with no way to retry short of a full reload.
+    button.disabled = false;
+  }
 }
 
 async function poll() {
@@ -94,10 +114,13 @@ async function renderFailure() {
        destroys a token that may still be valid &mdash; if you have not just run an
        extraction, wait and retry before resetting.</p>`
     : showResetHelp
-      ? `<p class="note">To run again, clear the Portability grant at
-         <a href="https://myaccount.google.com/permissions" target="_blank"
-         rel="noopener">myaccount.google.com/permissions</a>, then
-         <a href="/auth/google">reconnect</a>.</p>`
+      ? `<div class="rerun">
+           <p class="note">To run again, clear the Portability grant at
+           <a href="https://myaccount.google.com/permissions" target="_blank"
+           rel="noopener">myaccount.google.com/permissions</a>, or use the
+           button below, then <a href="/auth/google">reconnect</a>.</p>
+           <button class="button" id="reset-failed">Reset authorization</button>
+         </div>`
       : '';
 
   show('failed');
@@ -150,13 +173,43 @@ async function renderResults() {
 }
 
 /**
- * Place names, addresses and notes are user data that arrived from Google --
- * never trust them as markup.
+ * POST /auth/reset, gated on an explicit confirmation: it revokes the
+ * Portability grant even if it is still valid, and that cannot be undone
+ * from here -- only a fresh consent round-trip at /auth/google recovers.
  */
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (character) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[character]));
+async function resetAuthorization() {
+  const confirmed = window.confirm(
+    'This permanently revokes the current Google authorization, even if it ' +
+    'is still valid. You will need to reconnect before running another ' +
+    'extraction. This cannot be undone. Continue?',
+  );
+  if (!confirmed) return;
+
+  try {
+    const response = await fetch('/auth/reset', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: '{}',
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      window.alert(`Reset failed: ${body?.error ?? `HTTP ${response.status}`}`);
+      return;
+    }
+
+    // Reload rather than manipulating view state by hand: the extraction
+    // list for this userId is unchanged by a reset (only the tokens are
+    // invalidated), so the simplest correct thing is to let loadInitialState
+    // re-derive the view from a fresh GET /extractions.
+    window.location.reload();
+  } catch (error) {
+    // A rejected fetch (network blip) must not fail silently -- the user
+    // just confirmed a destructive, irreversible action and needs to know
+    // whether it actually happened.
+    window.alert(`Reset failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 document.getElementById('start').addEventListener('click', start);
@@ -166,5 +219,13 @@ document.getElementById('dismiss-warnings').addEventListener('click', () => {
 for (const tab of document.querySelectorAll('.tab')) {
   tab.addEventListener('click', () => { groupBy = tab.dataset.group; renderResults(); });
 }
+// Delegated: #reset-failed is injected via innerHTML in renderFailure(),
+// which replaces the element (and any directly bound listener) on every
+// call, so only a listener on a stable ancestor survives that.
+document.addEventListener('click', (event) => {
+  if (event.target instanceof HTMLElement && event.target.matches('#reset-done, #reset-failed')) {
+    resetAuthorization();
+  }
+});
 
 loadInitialState();

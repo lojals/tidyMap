@@ -26,6 +26,8 @@ h2 { font-size: 1.1rem; }
 .place { padding: 0.35rem 0; }
 .place .addr { color: var(--muted); font-size: 0.85rem; }
 .place .note-text { font-size: 0.85rem; font-style: italic; }
+.rerun { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
+.rerun .note { margin-top: 0; }
 .warnings {
   position: relative; border: 1px solid var(--line); border-radius: 6px;
   padding: 0.75rem 2rem 0.75rem 0.75rem; margin-bottom: 1rem; font-size: 0.9rem;

@@ -13,6 +13,9 @@
     <section id="view-signed-out" hidden>
       <p>Organize your saved Google Maps places by category, city, or country.</p>
       <a class="button" href="/auth/google">Connect Google</a>
+      <p class="note" id="connection-note" hidden>
+        Couldn't reach the server just now. Reload to try again.
+      </p>
     </section>
 
     <section id="view-ready" hidden>
@@ -42,6 +45,16 @@
         <span id="warnings-text"></span>
       </div>
       <div id="groups"></div>
+      <div class="rerun">
+        <p class="note">
+          Running this again needs a fresh Google authorization &mdash; the
+          Portability grant just used is one-time-use. Clear it at
+          <a href="https://myaccount.google.com/permissions" target="_blank"
+          rel="noopener">myaccount.google.com/permissions</a>, or use the
+          button below, then <a href="/auth/google">reconnect</a>.
+        </p>
+        <button class="button" id="reset-done">Reset authorization</button>
+      </div>
     </section>
 
     <section id="view-failed" hidden>
