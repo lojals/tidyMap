@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import Fastify from 'fastify';
+import cookie from '@fastify/cookie';
 import { authRoutes } from './routes.js';
 import { createAuthState } from './oauth.js';
 import { createDb, migrate } from '../db/client.js';
@@ -20,6 +21,11 @@ function buildApp() {
 
 async function buildServer(db: ReturnType<typeof createDb>) {
   const app = Fastify();
+  // Registered so the callback's reply.setCookie(...) and identityFrom's
+  // request.cookies parsing exercise the real @fastify/cookie mechanism,
+  // matching how src/server.ts wires it in production -- a bare Fastify
+  // instance has no setCookie/cookies support at all.
+  await app.register(cookie);
   await authRoutes(app, { db, config });
   return app;
 }
@@ -161,7 +167,8 @@ describe('authRoutes', () => {
     const first = await app.inject({ method: 'GET', url });
     const second = await app.inject({ method: 'GET', url });
 
-    expect(first.statusCode).toBe(200);
+    // First use succeeds (redirect); the state is consumed, so the replay fails.
+    expect(first.statusCode).toBe(302);
     expect(second.statusCode).toBe(400);
   });
 
@@ -178,12 +185,39 @@ describe('authRoutes', () => {
       url: `/auth/google/callback?code=auth-code&state=${state}`,
     });
 
-    expect(response.statusCode).toBe(200);
-    // No email in the response: Portability-only consent never yields one --
-    // Google does not tell this app which account gave consent.
-    expect(response.json()).not.toHaveProperty('email');
-    expect(response.json()).toMatchObject({ userId: expect.any(String) });
+    // The callback now redirects into the app with the userId in a cookie
+    // (see the dedicated cookie test below) rather than returning JSON, so
+    // this test's job is narrower: confirm a valid state actually reaches
+    // the exchange, exactly once.
+    expect(response.statusCode).toBe(302);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets a session cookie and redirects to / instead of returning JSON', async () => {
+    const { db } = buildApp();
+    const state = createAuthState(db);
+
+    // Without stubbing fetch, exchangeCode would issue a real outbound call
+    // to Google -- see the TTL test above for why that invariant matters.
+    const fetchMock = vi.fn().mockResolvedValue(tokenResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = await buildServer(db);
+    const response = await app.inject({
+      method: 'GET', url: `/auth/google/callback?code=abc&state=${state}`,
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/');
+
+    const setCookie = String(response.headers['set-cookie']);
+    expect(setCookie).toContain('tidymap_uid=');
+    expect(setCookie).toContain('HttpOnly');
+    // SameSite=Lax is what stops a cross-site POST to the unauthenticated,
+    // destructive /auth/reset once a cookie carries identity. A bare
+    // 'SameSite' substring would also match 'SameSite=None', so the
+    // assertion pins the full attribute pair.
+    expect(setCookie).toContain('SameSite=Lax');
   });
 
   it('returns 400 for a missing code when the state is valid and there is no error', async () => {

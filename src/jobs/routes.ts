@@ -6,6 +6,7 @@ import type { GroupBy, ResolvedPlace } from '../domain/types.js';
 import { extractions, places, users } from '../db/schema.js';
 import { group } from '../group/index.js';
 import { runExtraction, type PipelineDeps } from './pipeline.js';
+import { identityFrom } from '../auth/identity.js';
 
 const GROUP_BY_VALUES: GroupBy[] = ['category', 'city', 'country'];
 
@@ -22,8 +23,8 @@ export async function jobRoutes(
   ctx: AppContext,
   deps: JobRouteDeps = {},
 ): Promise<void> {
-  app.post<{ Body: { userId: string } }>('/extractions', async (request, reply) => {
-    const { userId } = request.body ?? {};
+  app.post<{ Body: { userId?: string } }>('/extractions', async (request, reply) => {
+    const userId = identityFrom(request);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
 
     const user = ctx.db.select().from(users).where(eq(users.id, userId)).all();

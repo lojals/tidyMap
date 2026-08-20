@@ -127,4 +127,29 @@ describe('extraction endpoints', () => {
     });
     expect(response.statusCode).toBe(400);
   });
+
+  it('accepts identity from the session cookie with no body userId', async () => {
+    const { app } = buildTestServer();
+    const created = await app.inject({
+      method: 'POST', url: '/extractions',
+      cookies: { tidymap_uid: 'u1' },
+      payload: {},
+    });
+    expect(created.statusCode).toBe(202);
+  });
+
+  it('prefers the cookie over a body userId when both are present', async () => {
+    const { app, db } = buildTestServer();
+    db.insert(users).values({ id: 'u2', createdAt: 0 }).run();
+
+    const created = await app.inject({
+      method: 'POST', url: '/extractions',
+      cookies: { tidymap_uid: 'u1' },
+      payload: { userId: 'u2' },
+    });
+
+    const { jobId } = created.json<{ jobId: string }>();
+    const row = db.select().from(extractions).where(eq(extractions.id, jobId)).all()[0]!;
+    expect(row.userId).toBe('u1');
+  });
 });

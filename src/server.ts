@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import Fastify, { type FastifyInstance } from 'fastify';
+import cookie from '@fastify/cookie';
 import type { AppContext } from './context.js';
 import { authRoutes } from './auth/routes.js';
 import { jobRoutes, type JobRouteDeps } from './jobs/routes.js';
@@ -13,6 +14,7 @@ export function buildServer(ctx: AppContext, deps: JobRouteDeps = {}): FastifyIn
   // stdout. Enabling logging later requires redacting that first.
   const app = Fastify({ logger: false });
 
+  app.register(cookie);
   app.register(async (instance) => authRoutes(instance, ctx));
   app.register(async (instance) => jobRoutes(instance, ctx, deps));
 
