@@ -43,8 +43,16 @@ real `users` table rebuild on pre-existing databases.
 unrelated process intercepts `localhost:3000` over IPv6 — requests to
 `http://localhost:3000/...` silently hang or misbehave. The server itself
 binds `127.0.0.1` only (IPv4), so `localhost` and the actual bind address
-are not the same target here. When testing manually with curl or a browser,
-target `http://127.0.0.1:3000/` explicitly rather than `localhost`.
+are not the same target here. If that happens, `http://127.0.0.1:3000`
+reaches the server — but only switch consistently: the session cookie is
+host-scoped and the OAuth redirect URI on file with Google is
+`localhost`-only, so browsing `127.0.0.1` while the cookie was set for
+`localhost` (or vice versa) strands the session — you'll look signed out
+despite holding a valid one, and re-consenting burns a one-time Portability
+authorization for nothing. Switching hosts for real means also updating
+`GOOGLE_REDIRECT_URI` and the Google Cloud console redirect URI to match.
+The docs (README, this file, `.env.example`) all default to `localhost`
+everywhere; that path works unless you hit this IPv6 issue.
 
 ## How far the live run actually got
 
@@ -227,8 +235,20 @@ comes after Phase 2.
   `extractions.error`, which is served over HTTP. Not a credential leak — the key
   travels in a header — but `portability/client.ts` does the same and it deserves
   one consistent ruling.
-- No route ties a `jobId` to a requesting user; no concurrency guard on
-  `POST /extractions`. Both consistent with the loopback-only access model.
+- **`GET /extractions/:jobId` and `GET /extractions/:jobId/results`
+  (`src/jobs/routes.ts`) perform no identity or ownership check at all** —
+  unlike every other identity-bearing route, neither calls `identityFrom`;
+  they look a job up by `jobId` alone. Anything on loopback holding a
+  jobId UUID can read that job's `error`, `warnings`, and full place list.
+  Pre-existing, not introduced by Phase 2, and now the only pair of
+  endpoints where the cookie-then-body identity resolution used everywhere
+  else doesn't apply. This is deliberate-by-omission, not a considered
+  decision — nobody chose to leave these two open; they were just never
+  wired up to check. The loopback binding and the fact that job ids are
+  UUIDs are what currently limit exposure, not an intentional
+  access-control choice. Close this before any multi-user work.
+- No concurrency guard on `POST /extractions`. Consistent with the
+  loopback-only access model.
 
 ## Security posture (do not silently change)
 

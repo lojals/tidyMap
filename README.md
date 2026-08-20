@@ -31,10 +31,28 @@ changes, refresh a stale build with `npm run build` before `npm start`, or
 just use `npm run dev` (`tsx watch`), which always runs current source and
 has no build step to forget.
 
+### If `localhost:3000` doesn't connect
+
+The server binds `127.0.0.1` (IPv4) only. On a system where `localhost`
+resolves to `::1` (IPv6) first, `http://localhost:3000` will fail to
+connect even though the server is running — this happened during Phase 2
+verification on the development machine, where an unrelated process was
+also listening on `localhost:3000` over IPv6.
+
+If that happens, `http://127.0.0.1:3000` reaches the server — **but you
+must then use `127.0.0.1` consistently everywhere**, including changing the
+authorized redirect URI in the Google Cloud console and
+`GOOGLE_REDIRECT_URI` in `.env` to match. Mixing the two hosts silently
+strands the session cookie, because it is host-scoped: you'll appear signed
+out on one host while holding a valid session on the other, and
+re-consenting spends a one-time authorization to no effect. The default
+path (`localhost` everywhere, as used throughout this README) works and is
+what you should use unless you actually hit this.
+
 ## Using the web UI
 
 `npm run dev` (or `npm start` against a fresh build) serves the whole app —
-API and UI — on one port. Open <http://127.0.0.1:3000/> and click **Connect
+API and UI — on one port. Open <http://localhost:3000/> and click **Connect
 Google**. That sends you through the same `/auth/google` consent flow the
 curl walkthrough below uses; the callback now sets an HttpOnly session
 cookie and redirects you straight back to `/` instead of showing you
@@ -161,7 +179,7 @@ API itself, and *has* been run against a real `GOOGLE_PLACES_API_KEY` — see
 "How far the live run actually got" in [docs/HANDOFF.md](docs/HANDOFF.md)
 for what that did and did not cover.
 
-- [ ] 1. Open http://127.0.0.1:3000/auth/google and grant consent. As of
+- [ ] 1. Open http://localhost:3000/auth/google and grant consent. As of
       Task 3, the callback no longer returns your `userId` in the response —
       it sets an HttpOnly `tidymap_uid` session cookie and redirects you to
       `/`. If you're driving the UI, that's the whole step: the browser
@@ -175,7 +193,7 @@ for what that did and did not cover.
 - [ ] 2. Start an extraction:
 
       ```bash
-      curl -X POST http://127.0.0.1:3000/extractions \
+      curl -X POST http://localhost:3000/extractions \
         -H 'content-type: application/json' \
         -d '{"userId":"YOUR_USER_ID"}'
       ```
@@ -188,15 +206,15 @@ for what that did and did not cover.
 - [ ] 3. Poll until `status` is `complete` — the archive typically takes a few minutes:
 
       ```bash
-      curl http://127.0.0.1:3000/extractions/JOB_ID
+      curl http://localhost:3000/extractions/JOB_ID
       ```
 
 - [ ] 4. Fetch the results:
 
       ```bash
-      curl 'http://127.0.0.1:3000/extractions/JOB_ID/results?groupBy=category'
-      curl 'http://127.0.0.1:3000/extractions/JOB_ID/results?groupBy=city'
-      curl 'http://127.0.0.1:3000/extractions/JOB_ID/results?groupBy=country'
+      curl 'http://localhost:3000/extractions/JOB_ID/results?groupBy=category'
+      curl 'http://localhost:3000/extractions/JOB_ID/results?groupBy=city'
+      curl 'http://localhost:3000/extractions/JOB_ID/results?groupBy=country'
       ```
 
 While running this, record the following — they are real gaps/behaviors this
@@ -254,7 +272,7 @@ behavior.)
 To reset:
 
 ```bash
-curl -X POST http://127.0.0.1:3000/auth/reset \
+curl -X POST http://localhost:3000/auth/reset \
   -H 'content-type: application/json' \
   -d '{"userId":"YOUR_USER_ID"}'
 ```
